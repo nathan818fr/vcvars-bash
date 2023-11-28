@@ -182,7 +182,7 @@ function find_vcvarsall() {
   else
     local vswhere
     vswhere=$(command -v 'vswhere' 2>/dev/null || unixpath 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe')
-    vsinstalldir=$("$vswhere" -latest -property installationPath | fix_crlf)
+    vsinstalldir=$("$vswhere" -latest -property installationPath </dev/null | fix_crlf)
     if [[ -z "$vsinstalldir" ]]; then
       printf 'error: vswhere returned an empty installation path\n' >&2
       return 1
