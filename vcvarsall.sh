@@ -176,13 +176,24 @@ function main() {
 # Outputs:
 #   stdout: The windows-style path to vcvarsall.bat
 function find_vcvarsall() {
-  local vsinstalldir
+  local vsinstalldir product
+  # The parameter `-latest` does not populate Build Tools only VS installations.
+  # We try to find those one by one, until one of these is found.
+  local vsproductids=(
+    "Microsoft.VisualStudio.Product.Enterprise"
+    "Microsoft.VisualStudio.Product.Professional"
+    "Microsoft.VisualStudio.Product.Community"
+    "Microsoft.VisualStudio.Product.BuildTools"
+  )
   if [[ -n "${VSINSTALLDIR:-}" ]]; then
     vsinstalldir="$VSINSTALLDIR"
   else
     local vswhere
     vswhere=$(command -v 'vswhere' 2>/dev/null || unixpath 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe')
-    vsinstalldir=$("$vswhere" -latest -property installationPath </dev/null | fix_crlf)
+    for product in ${vsproductids[@]} ; do
+      vsinstalldir=$("$vswhere" -latest -product "$product" -property installationPath </dev/null | fix_crlf)
+      [[ -z "$vsinstalldir" ]] && break
+    done
     if [[ -z "$vsinstalldir" ]]; then
       printf 'error: vswhere returned an empty installation path\n' >&2
       return 1
