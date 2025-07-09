@@ -6,6 +6,8 @@
 set -Eeuo pipefail
 shopt -s inherit_errexit
 
+declare -r VERSION='2025-07-09.1'
+
 function detect_platform() {
   case "${OSTYPE:-}" in
   cygwin* | msys* | win32)
@@ -37,6 +39,7 @@ function print_usage() {
   default)
     cat <<EOF
 Usage: eval "\$(vcvarsall.sh [vcvarsall.bat arguments])"
+Script version: $VERSION
 
 Load MSVC environment variables using vcvarsall.bat and export them.
 The script writes a list of export commands to stdout, to be evaluated by a
@@ -48,6 +51,7 @@ EOF
   run)
     cat <<EOF
 Usage: vcvarsrun.sh [vcvarsall.bat arguments] -- command [arguments...]
+Script version: $VERSION
 
 Load MSVC environment variables using vcvarsall.bat and execute a command with
 them.
@@ -62,7 +66,18 @@ Environment variables:
   VSINSTALLDIR
     The path to the Visual Studio installation directory.
     Example: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community"
-    Default: The latest Visual Studio installation directory found by vswhere.exe
+    Default: The latest Visual Studio installation directory found by
+             vswhere.exe
+
+  VSWHEREPATH
+    The path to the vswhere.exe executable.
+    Example: "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe"
+    Default: Automatically detected (in the PATH or well-known locations)
+
+  VSWHEREARGS
+    The arguments to pass to vswhere.exe.
+    This value is always automatically prefixed with "-latest -property installationPath".
+    Default: "-products *"
 EOF
   local vcvarsall
   vcvarsall=$(find_vcvarsall)
@@ -173,6 +188,8 @@ function main() {
 # Locate vcvarsall.bat
 # Inputs:
 #   VSINSTALLDIR: The path to the Visual Studio installation directory (optional)
+#   VSWHEREPATH: The path to the vswhere.exe executable (optional)
+#   VSWHEREARGS: The arguments to pass to vswhere.exe (optional)
 # Outputs:
 #   stdout: The windows-style path to vcvarsall.bat
 function find_vcvarsall() {
@@ -181,8 +198,27 @@ function find_vcvarsall() {
     vsinstalldir="$VSINSTALLDIR"
   else
     local vswhere
-    vswhere=$(command -v 'vswhere' 2>/dev/null || unixpath 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe')
-    vsinstalldir=$("$vswhere" -products '*' -latest -property installationPath </dev/null | fix_crlf)
+    if [[ -n "${VSWHEREPATH:-}" ]]; then
+      vswhere=$(unixpath "$VSWHEREPATH")
+    else
+      vswhere=$(command -v 'vswhere' 2>/dev/null || unixpath 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe')
+    fi
+
+    local vswhereargs=(-latest -property installationPath)
+    if [[ -n "${VSWHEREARGS:-}" ]]; then
+      parse_args_simple "$VSWHEREARGS"
+      vswhereargs+=("${result[@]}")
+    else
+      vswhereargs+=(-products '*')
+    fi
+
+    if [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
+      printf 'debug: vswhere path: %s\n' "$vswhere" >&2
+      printf 'debug: vswhere args:\n' >&2
+      printf 'debug:  [ %s ]\n' "${vswhereargs[@]}" >&2
+    fi
+
+    vsinstalldir=$("$vswhere" "${vswhereargs[@]}" </dev/null | fix_crlf)
     if [[ -z "$vsinstalldir" ]]; then
       printf 'error: vswhere returned an empty installation path\n' >&2
       return 1
@@ -190,6 +226,85 @@ function find_vcvarsall() {
   fi
 
   printf '%s\n' "$(winpath "$vsinstalldir")\\VC\\Auxiliary\\Build\\vcvarsall.bat"
+}
+
+# Split command arguments into an array, with a simple logic
+# - Arguments are separated by whitespace (space, tab, newline, carriage return)
+# - To include whitespace in an argument, it must be enclosed in double quotes (")
+# - When inside a double-quoted argument, quotes can be escaped by doubling them ("")
+# Inputs:
+#   $1: The string to parse
+# Outputs:
+#   result: An array of parsed arguments
+function parse_args_simple() {
+  declare -g result=()
+  local str="$1 " # add a trailing space to simplify the last argument handling
+  local args=()
+  local current_type=none # none = waiting for next arg, normal = inside normal arg, quoted = inside quoted arg
+  local current_value=''
+  local i=0 len=${#str}
+  while ((i < len)); do
+    local c=${str:i:1}
+    case "$current_type" in
+    none)
+      case "$c" in
+      ' ' | $'\t' | $'\n' | $'\r')
+        # Ignore whitespace
+        ;;
+      '"')
+        # Start a quoted argument
+        current_type=quoted
+        current_value=''
+        ;;
+      *)
+        # Start a normal argument
+        current_type=normal
+        current_value="$c"
+        ;;
+      esac
+      ;;
+    normal)
+      case "$c" in
+      ' ' | $'\t' | $'\n' | $'\r')
+        # End of normal argument, add it to the list
+        args+=("$current_value")
+        current_type=none
+        current_value=''
+        ;;
+      *)
+        # Continue building the normal argument
+        current_value+="$c"
+        ;;
+      esac
+      ;;
+    quoted)
+      case "$c" in
+      '"')
+        if [[ "${str:i+1:1}" != '"' ]]; then
+          # End of quoted argument, add it to the list
+          args+=("$current_value")
+          current_type=none
+          current_value=''
+        else
+          # Escaped quote, add a single quote to the current value
+          current_value+='"'
+          ((++i)) # Skip the next quote
+        fi
+        ;;
+      *)
+        # Continue building the quoted argument
+        current_value+="$c"
+        ;;
+      esac
+      ;;
+    esac
+    ((++i))
+  done
+  if [[ "$current_type" != none ]]; then
+    printf 'error: Unfinished %s argument: %s\n' "$current_type" "$current_value" >&2
+    return 1
+  fi
+  declare -g result=("${args[@]}")
 }
 
 # Run a command with cmd.exe
