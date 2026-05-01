@@ -14,12 +14,36 @@ Usage: `eval "$(vcvarsall.sh [vcvarsall.bat arguments])"`
 See [Microsoft vcvarsall.bat syntax][1] for vcvarsall.bat arguments
 documentation.
 
-Example:
+Example (CMake with NMake, recommended):
 ```bash
 eval "$(./vcvarsall.sh x64)"
-cmake -S ..  -B build -G "NMake Makefiles"
+cmake -S .  -B build -G "NMake Makefiles"
 cmake --build build --config Release
 ```
+
+Example (CMake with Ninja):\
+You should explicitly set the C and C++ compilers to `cl` to ensure MSVC is
+used.
+```bash
+eval "$(./vcvarsall.sh x64)"
+cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+cmake --build build --config Release
+```
+
+Example (using cl directly):
+```bash
+eval "$(./vcvarsall.sh x64)"
+cl /nologo /EHsc /Fe:hello.exe hello.cpp
+```
+
+And for other build systems, the logic is always the same:
+1. First evaluate `vcvarsall.sh` to set up the environment.
+   ```bash
+   eval "$(./vcvarsall.sh x64)"
+   ```
+2. Then run your build commands, which will now have access to the MSVC toolset.\
+   **Important: You may need to specify `cl` as the compiler in your build
+   configuration to ensure MSVC is used.**
 
 ## vcvarsrun.sh
 
