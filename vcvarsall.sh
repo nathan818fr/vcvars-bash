@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 shopt -s inherit_errexit
 
-declare -r VERSION='2025-07-09.1'
+declare -r VERSION='2026-05-14.1'
 
 function detect_platform() {
   case "${OSTYPE:-}" in
@@ -63,6 +63,11 @@ EOF
   cat <<EOF
 
 Environment variables:
+  VCVARS_SILENT
+    If set to 1, suppress the vcvarsall.bat output (still prints errors if
+    initialization fails).
+    Default: 0
+
   VSINSTALLDIR
     The path to the Visual Studio installation directory.
     Example: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community"
@@ -148,12 +153,16 @@ function main() {
     fi
   }
 
-  local name value initialized=false
+  local name value initialized=false suppressed_output=()
   while IFS='=' read -r name value; do
     if [[ "$initialized" == 'false' ]]; then
       if [[ -n "$value" ]]; then name+="=$value"; fi
       if [[ "$name" == *' Environment initialized for: '* ]]; then initialized=true; fi
-      printf '%s\n' "$name" >&2
+      if [[ "${VCVARS_SILENT:-}" == 1 ]]; then
+        suppressed_output+=("$name")
+      else
+        printf '%s\n' "$name" >&2
+      fi
       continue
     fi
 
@@ -175,6 +184,11 @@ function main() {
   done <<<"$vcvarsall_env"
 
   if [[ "$initialized" == 'false' ]]; then
+    # Always print the suppressed output on initialization failure, to help debugging
+    local line
+    for line in "${suppressed_output[@]}"; do
+      printf '%s\n' "$line" >&2
+    done
     printf 'error: vcvarsall.bat failed' >&2
     return 1
   fi
