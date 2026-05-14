@@ -38,7 +38,7 @@ function print_usage() {
   case "$script_mode" in
   default)
     cat <<EOF
-Usage: eval "\$(vcvarsall.sh [vcvarsall.bat arguments])"
+Usage: eval "\$(vcvarsall.sh [-s] [vcvarsall.bat arguments])"
 Script version: $VERSION
 
 Load MSVC environment variables using vcvarsall.bat and export them.
@@ -46,21 +46,27 @@ The script writes a list of export commands to stdout, to be evaluated by a
 POSIX-compliant shell.
 
 Example: eval "\$(vcvarsall.sh x86)"
+Example: eval "\$(vcvarsall.sh -s x86)"
 EOF
     ;;
   run)
     cat <<EOF
-Usage: vcvarsrun.sh [vcvarsall.bat arguments] -- command [arguments...]
+Usage: vcvarsrun.sh [-s] [vcvarsall.bat arguments] -- command [arguments...]
 Script version: $VERSION
 
 Load MSVC environment variables using vcvarsall.bat and execute a command with
 them.
 
 Example: vcvarsrun.sh x64 -- cl /nologo /EHsc /Fe:hello.exe hello.cpp
+Example: vcvarsrun.sh -s x64 -- cl /nologo /EHsc /Fe:hello.exe hello.cpp
 EOF
     ;;
   esac
   cat <<EOF
+
+Options:
+  -s
+    Silent mode: suppress the vcvarsall.bat banner and initialization output.
 
 Environment variables:
   VSINSTALLDIR
@@ -94,7 +100,7 @@ function main() {
     return 1
   fi
 
-  local arg vcvarsall_args=()
+  local arg vcvarsall_args=() silent=false
   for arg in "$@"; do
     shift
     if [[ "$arg" == '--' ]]; then
@@ -104,6 +110,10 @@ function main() {
         return 1
       fi
       break
+    fi
+    if [[ "$arg" == '-s' ]]; then
+      silent=true
+      continue
     fi
     vcvarsall_args+=("$(cmdesc "$arg")")
   done
@@ -153,7 +163,7 @@ function main() {
     if [[ "$initialized" == 'false' ]]; then
       if [[ -n "$value" ]]; then name+="=$value"; fi
       if [[ "$name" == *' Environment initialized for: '* ]]; then initialized=true; fi
-      printf '%s\n' "$name" >&2
+      if [[ "$silent" == 'false' ]]; then printf '%s\n' "$name" >&2; fi
       continue
     fi
 

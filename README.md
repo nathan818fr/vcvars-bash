@@ -9,7 +9,10 @@ them.
 It is intended to be evaluated (by Bash or any other POSIX-compatible shell,
 since it writes a list of export commands to stdout).
 
-Usage: `eval "$(vcvarsall.sh [vcvarsall.bat arguments])"`
+Usage: `eval "$(vcvarsall.sh [options] [vcvarsall.bat arguments])"`
+
+Options:
+- `-s` — Silent: suppress the vcvarsall.bat banner and initialization output.
 
 See [Microsoft vcvarsall.bat syntax][1] for vcvarsall.bat arguments
 documentation.
@@ -49,7 +52,10 @@ And for other build systems, the logic is always the same:
 
 Like `vcvarsall.sh`, but runs a command instead of exporting variables.
 
-Usage: `vcvarsrun.sh [vcvarsall.bat arguments] -- command [arguments...]`
+Usage: `vcvarsrun.sh [options] [vcvarsall.bat arguments] -- command [arguments...]`
+
+Options:
+- `-s` — Silent: suppress the vcvarsall.bat banner and initialization output.
 
 Example:
 ```bash
