@@ -390,13 +390,22 @@ function winpath() {
 function pathlist_win_to_unix() {
   local win_paths=$1
 
-  local path_dir first=true
+  # Collect non-empty entries
+  local path_dir entries=()
   while IFS= read -r -d';' path_dir; do
-    if [[ -z "$path_dir" ]]; then continue; fi
-
-    if [[ "$first" == 'true' ]]; then first=false; else printf ':'; fi
-    printf '%s' "$(unixpath "$path_dir")"
+    if [[ -n "$path_dir" ]]; then
+      entries+=("$path_dir")
+    fi
   done <<<"${win_paths};"
+
+  if [[ ${#entries[@]} -eq 0 ]]; then return; fi
+
+  case "$bash_platform" in
+  win_wsl)    printf '%s\n' "${entries[@]}" | wslpath -f - | paste -sd ':'
+    ;;
+  *)
+    printf '%s\n' "${entries[@]}" | cygpath -f - | paste -sd ':'
+  esac
 }
 
 # Normalize a unix-style path list, removing duplicates and empty entries
