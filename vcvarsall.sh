@@ -27,7 +27,7 @@ function detect_platform() {
 
 function detect_mode() {
   # Detect the mode depending on the name called
-  if [[ "$(basename -- "$0")" == vcvarsrun* ]]; then
+  if [[ "${0##*/}" == vcvarsrun* ]]; then
     declare -gr script_mode='run' # vcvarsrun.sh
   else
     declare -gr script_mode='default' # vcvarsall.sh
@@ -116,7 +116,7 @@ function main() {
   # Get MSVC environment variables from vcvarsall.bat
   local vcvarsall vcvarsall_env
   vcvarsall=$(find_vcvarsall)
-  vcvarsall_env=$({ cmd "$(cmdesc "$vcvarsall")" "${vcvarsall_args[@]}" '&&' 'set' </dev/null || true; } | fix_crlf)
+  vcvarsall_env=$({ cmd "$(cmdesc "$vcvarsall")" "${vcvarsall_args[@]}" '&&' 'set' </dev/null || true; })
 
   # Filter MSVC environment variables and export them.
   # The list of variables to export was based on a comparison between a clean environment and the vcvarsall.bat
@@ -150,6 +150,8 @@ function main() {
 
   local name value initialized=false
   while IFS='=' read -r name value; do
+    name=${name%$'\r'}
+    value=${value%$'\r'}
     if [[ "$initialized" == 'false' ]]; then
       if [[ -n "$value" ]]; then name+="=$value"; fi
       if [[ "$name" == *' Environment initialized for: '* ]]; then initialized=true; fi
@@ -218,7 +220,8 @@ function find_vcvarsall() {
       printf 'debug:  [ %s ]\n' "${vswhereargs[@]}" >&2
     fi
 
-    vsinstalldir=$("$vswhere" "${vswhereargs[@]}" </dev/null | fix_crlf)
+    vsinstalldir=$("$vswhere" "${vswhereargs[@]}" </dev/null)
+    vsinstalldir=${vsinstalldir%$'\r'}
     if [[ -z "$vsinstalldir" ]]; then
       printf 'error: vswhere returned an empty installation path\n' >&2
       return 1
@@ -325,8 +328,12 @@ function cmd() {
 # Outputs:
 #   stdout: The escaped argument
 function cmdesc() {
-  # shellcheck disable=SC2001
-  sed 's/[^0-9A-Za-z]/^\0/g' <<<"$1"
+  local str=$1 result='' i c
+  for ((i = 0; i < ${#str}; i++)); do
+    c=${str:i:1}
+    if [[ "$c" == [0-9A-Za-z] ]]; then result+=$c; else result+="^$c"; fi
+  done
+  printf '%s\n' "$result"
 }
 
 # Convert path to an absolute unix-style path
