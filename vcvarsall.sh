@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 shopt -s inherit_errexit
 
-declare -r VERSION='2026-05-14.1'
+declare -r VERSION='2026-10-10.1'
 
 function detect_platform() {
   case "${OSTYPE:-}" in
@@ -123,7 +123,24 @@ function main() {
   vcvarsall=$(find_vcvarsall)
   vcvarsall_env=$({ cmd "$(cmdesc "$vcvarsall")" "${vcvarsall_args[@]}" '&&' 'set' </dev/null || true; } | fix_crlf)
 
-  # Filter MSVC environment variables and export them.
+  # Filter MSVC environment variables and export them
+  parse_vcvarsall_env <<<"$vcvarsall_env"
+
+  # Execute command if needed
+  if [[ "$script_mode" == 'run' ]]; then
+    exec "$@"
+  fi
+}
+
+# Filter MSVC environment variables from the vcvarsall.bat output and export them
+# Inputs:
+#   stdin: The output of "vcvarsall.bat && set" (with LF line endings)
+#   script_mode: 'default' to write export commands, 'run' to export variables in the current shell
+#   VCVARS_SILENT: If 1, print the vcvarsall.bat messages only on failure
+# Outputs:
+#   stdout: The export commands (in 'default' mode)
+#   stderr: The vcvarsall.bat messages (everything up to the "Environment initialized" line)
+function parse_vcvarsall_env() {
   # The list of variables to export was based on a comparison between a clean environment and the vcvarsall.bat
   # environment (on different MSVC versions, tools and architectures).
   #
@@ -153,18 +170,22 @@ function main() {
     fi
   }
 
-  local name value initialized=false suppressed_output=()
-  while IFS='=' read -r name value; do
+  local line name value initialized=false suppressed_output=()
+  while IFS= read -r line; do
     if [[ "$initialized" == 'false' ]]; then
-      if [[ -n "$value" ]]; then name+="=$value"; fi
-      if [[ "$name" == *' Environment initialized for: '* ]]; then initialized=true; fi
+      if [[ "$line" == *' Environment initialized for: '* ]]; then initialized=true; fi
       if [[ "${VCVARS_SILENT:-}" == 1 ]]; then
-        suppressed_output+=("$name")
+        suppressed_output+=("$line")
       else
-        printf '%s\n' "$name" >&2
+        printf '%s\n' "$line" >&2
       fi
       continue
     fi
+
+    # Split on the first "=" only ("IFS='=' read" would drop a trailing "=" from the value)
+    if [[ "$line" != *=* ]]; then continue; fi
+    name=${line%%=*}
+    value=${line#*=}
 
     case "${name^^}" in
     LIB | LIBPATH | INCLUDE | EXTERNAL_INCLUDE | COMMANDPROMPTTYPE | DEVENVDIR | EXTENSIONSDKDIR | FRAMEWORK* | \
@@ -182,21 +203,15 @@ function main() {
       export_env 'PATH' "$new_paths"
       ;;
     esac
-  done <<<"$vcvarsall_env"
+  done
 
   if [[ "$initialized" == 'false' ]]; then
     # Always print the suppressed output on initialization failure, to help debugging
-    local line
     for line in "${suppressed_output[@]}"; do
       printf '%s\n' "$line" >&2
     done
-    printf 'error: vcvarsall.bat failed' >&2
+    printf 'error: vcvarsall.bat failed\n' >&2
     return 1
-  fi
-
-  # Execute command if needed
-  if [[ "$script_mode" == 'run' ]]; then
-    exec "$@"
   fi
 }
 

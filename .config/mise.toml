@@ -1,0 +1,30 @@
+[tools]
+bats = "1.14.0"
+shellcheck = "latest"
+shfmt = "3"
+
+[vars]
+scripts = "vcvarsall.sh vcvarsrun.sh test/*.sh test/*.bash test/*.bats"
+
+[tasks.test]
+description = "Run the unit tests"
+shell = "bash -c"
+run = "bats test/"
+
+[tasks.lint]
+description = "Check the scripts with ShellCheck and shfmt"
+shell = "bash -c"
+run = [
+  "shellcheck {{vars.scripts}}",
+  "shfmt -i 2 -d {{vars.scripts}}",
+]
+
+[tasks.fmt]
+description = "Format the scripts with shfmt"
+shell = "bash -c"
+run = "shfmt -i 2 -w {{vars.scripts}}"
+
+[tasks.integration]
+description = "Run the integration tests (Windows only, needs Visual Studio)"
+shell = "bash -c"
+run = "test/integration.sh"

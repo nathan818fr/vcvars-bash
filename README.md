@@ -75,5 +75,9 @@ You can override this behavior by setting the `VSINSTALLDIR` environment
 variable (e.g.
 `VSINSTALLDIR='C:\Program Files\Microsoft Visual Studio\2022\Community'`).
 
+## Contributing
+
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for how to run the tests and linters.
+
 
 [1]: https://learn.microsoft.com/en-us/cpp/build/building-on-the-command-line?view=msvc-170#vcvarsall-syntax

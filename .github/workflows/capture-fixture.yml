@@ -1,0 +1,38 @@
+name: Capture fixture
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/capture-fixture.yml
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Capture vcvarsall.bat output
+        run: |
+          cd "$(cygpath -u "$RUNNER_TEMP")"
+          vs=$('/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe' -latest -products '*' -property installationPath | tr -d '\r')
+          # In one cmd.exe: write the environment to before.txt, then print the vcvarsall.bat output and the new environment
+          printf '@set >"%%~dp0before.txt"\r\n@call "%s\\VC\\Auxiliary\\Build\\vcvarsall.bat" x64 && set\r\n' "$vs" >capture.bat
+          cmd.exe //c capture.bat </dev/null >after.txt
+          # Drop the runner variables and anything that looks like a secret (artifacts are not masked)
+          filter='^(ACTIONS|GITHUB|RUNNER)_|^[^=]*(TOKEN|SECRET|PASSWORD|KEY)[^=]*='
+          grep -viE "$filter" after.txt >vcvarsall-x64.txt
+          # Variables added (+) or removed (-) by vcvarsall.bat, a changed one appears as both
+          grep -viE "$filter" before.txt | sed 's/\r$//' | LC_ALL=C sort >before.env
+          sed '1,/ Environment initialized for: /d; s/\r$//' vcvarsall-x64.txt | LC_ALL=C sort >after.env
+          diff --old-line-format='- %L' --new-line-format='+ %L' --unchanged-line-format='' before.env after.env >vcvarsall-x64.diff || [[ $? -eq 1 ]]
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vcvarsall-x64
+          path: |
+            ${{ runner.temp }}/vcvarsall-x64.txt
+            ${{ runner.temp }}/vcvarsall-x64.diff

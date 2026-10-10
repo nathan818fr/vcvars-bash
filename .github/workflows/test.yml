@@ -1,0 +1,67 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install zsh
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+      - uses: jdx/mise-action@v5
+      - name: Lint
+        run: mise run lint
+      - name: Unit tests
+        run: mise run test
+        env:
+          TEST_SHELLS: dash zsh
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: git-bash
+            shell: bash
+          - name: msys2
+            shell: msys2 {0}
+          - name: cygwin
+            shell: D:\cygwin\bin\bash.exe --noprofile --norc -eo pipefail -o igncr '{0}'
+    name: windows (${{ matrix.name }})
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v5
+      # mise can't install bats on Windows, so clone the version pinned in .config/mise.toml (with LF line endings for Cygwin)
+      - name: Install bats
+        shell: bash
+        run: |
+          version=$(sed -n 's/^bats = "\(.*\)"$/\1/p' .config/mise.toml)
+          git -c core.autocrlf=input clone --quiet --depth 1 --branch "v${version}" https://github.com/bats-core/bats-core.git .bats
+      - if: matrix.name == 'msys2'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: false
+      - if: matrix.name == 'cygwin'
+        uses: cygwin/cygwin-install-action@v6
+        with:
+          install-dir: D:\cygwin
+      - name: Unit tests
+        run: bash .bats/bin/bats test/
+      - name: Integration tests
+        run: bash test/integration.sh
