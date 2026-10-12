@@ -28,3 +28,8 @@ run = "shfmt -i 2 -w {{vars.scripts}}"
 description = "Run the integration tests (Windows only, needs Visual Studio)"
 shell = "bash -c"
 run = "test/integration.sh"
+
+[tasks.bench]
+description = "Benchmark vcvarsall.sh versions (Windows only, needs Visual Studio)"
+shell = "bash -c"
+run = "test/bench.sh"
