@@ -121,7 +121,7 @@ function main() {
   # Get MSVC environment variables from vcvarsall.bat
   local vcvarsall vcvarsall_env
   vcvarsall=$(find_vcvarsall)
-  vcvarsall_env=$({ cmd "$(cmdesc "$vcvarsall")" "${vcvarsall_args[@]}" '&&' 'set' </dev/null || true; } | fix_crlf)
+  vcvarsall_env=$(run_vcvarsall "$vcvarsall" "${vcvarsall_args[@]}")
 
   # Filter MSVC environment variables and export them
   parse_vcvarsall_env <<<"$vcvarsall_env"
@@ -256,6 +256,37 @@ function find_vcvarsall() {
   fi
 
   printf '%s\n' "$(winpath "$vsinstalldir")\\VC\\Auxiliary\\Build\\vcvarsall.bat"
+}
+
+# Run vcvarsall.bat followed by "set"
+# Must run in a subshell, e.g. "$(run_vcvarsall ...)", as it sets an EXIT trap
+# Inputs:
+#   $1: The windows-style path to vcvarsall.bat
+#   $2...: The vcvarsall.bat arguments (escaped with cmdesc)
+# Outputs:
+#   stdout: The output of "vcvarsall.bat && set" (with LF line endings)
+function run_vcvarsall() {
+  local vcvarsall
+  vcvarsall=$(cmdesc "$1")
+  shift
+
+  # Prefer a temporary file to a pipe: VsDevCmd.bat sends telemetry from a background PowerShell (START /B) that
+  # inherits cmd.exe's stdout, so a pipe would only be closed when it exits, several seconds after vcvarsall.bat.
+  local output_file
+  if output_file=$(mktemp -t vcvars-bash.XXXXXXXXXX 2>/dev/null); then
+    # shellcheck disable=SC2064 # expand now: output_file is local
+    trap "rm -f -- $(printf '%q' "$output_file")" EXIT
+    if { cmd "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } >"$output_file"; then
+      fix_crlf <"$output_file"
+      return
+    fi
+  fi
+
+  # Fall back to a pipe if the temporary file can't be created or opened (the redirection fails before cmd.exe starts)
+  if [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
+    printf 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe\n' >&2
+  fi
+  { cmd "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } | fix_crlf
 }
 
 # Split command arguments into an array, with a simple logic

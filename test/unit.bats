@@ -196,6 +196,74 @@ function stub_path_tools() {
   assert_equal "$(printf 'a\r\nb\rc\r\n' | fix_crlf)" $'a\nb\rc'
 }
 
+### run_vcvarsall
+
+# Use a private TMPDIR and replace cmd (cmd.exe) with a stub that logs its calls to CMD_CALLS_FILE and prints its
+# arguments with CRLF line endings. If STUB_BACKGROUND_SECONDS is set, the stub also leaves a background process
+# holding its stdout open, like the VS telemetry.
+function stub_cmd() {
+  export TMPDIR="${BATS_TEST_TMPDIR}/tmp"
+  mkdir -p -- "$TMPDIR"
+  CMD_CALLS_FILE="${BATS_TEST_TMPDIR}/cmd.calls"
+  # shellcheck disable=SC2329
+  function cmd() {
+    printf '%s\n' "$*" >>"$CMD_CALLS_FILE"
+    printf '%s\r\n' "$@"
+    if [[ -n "${STUB_BACKGROUND_SECONDS:-}" ]]; then
+      sleep "$STUB_BACKGROUND_SECONDS" 2>/dev/null 3>&- & # fd 3 closed: bats waits for it
+    fi
+  }
+}
+
+# Expected output of: run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
+CMD_ARGS='C^:^\VS^\vcvarsall^.bat
+x64
+a^ b
+&&
+set'
+
+@test "run_vcvarsall: escapes the path, removes CR, and deletes its temporary file" {
+  stub_cmd
+  assert_equal "$(run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b')" "$CMD_ARGS"
+  assert_equal "$(ls -A -- "$TMPDIR")" ''
+}
+
+@test "run_vcvarsall: does not wait for background processes holding the output open" {
+  stub_cmd
+  STUB_BACKGROUND_SECONDS=5
+  local start=$SECONDS output
+  output=$(run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b')
+  assert_equal "$output" "$CMD_ARGS"
+  ((SECONDS - start < 3))
+}
+
+@test "run_vcvarsall: falls back to a pipe when no temporary file can be created" {
+  stub_cmd
+  TMPDIR="${BATS_TEST_TMPDIR}/missing"
+  VCVARSBASH_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
+  assert_equal "$status" 0
+  assert_equal "$output" "$CMD_ARGS"
+  assert_equal "$stderr" 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe'
+}
+
+@test "run_vcvarsall: falls back to a pipe when the temporary file can't be written, running cmd once" {
+  stub_cmd
+  # shellcheck disable=SC2329
+  function mktemp() {
+    # Return an unwritable path for the script's temporary file only (bats uses mktemp too)
+    if [[ "$*" != *vcvars-bash.* ]]; then
+      command mktemp "$@"
+      return
+    fi
+    printf '%s\n' "${BATS_TEST_TMPDIR}/missing/file"
+  }
+  run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
+  assert_equal "$status" 0
+  assert_equal "$output" "$CMD_ARGS"
+  assert_equal "$(wc -l <"$CMD_CALLS_FILE")" 1
+  [[ "$stderr" == *'No such file or directory'* ]]
+}
+
 ### parse_vcvarsall_env
 
 # Short "vcvarsall.bat && set" output (after fix_crlf), see also fixtures/vcvarsall-x64.txt
