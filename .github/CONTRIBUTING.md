@@ -11,3 +11,6 @@ mise run integration  # integration tests (Windows only, needs Visual Studio)
 ```
 
 All of them run on GitHub Actions for each push and pull request.
+
+To compare the performance of `vcvarsall.sh` versions, e.g. `mise run bench -- main HEAD` (Windows only, not run on
+GitHub Actions), see `test/bench.sh -h`.
