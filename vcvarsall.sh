@@ -197,7 +197,8 @@ function parse_vcvarsall_env() {
     PATH)
       # PATH is a special case, requiring special handling
       local new_paths
-      new_paths=$(pathlist_win_to_unix "$value")             # Convert to unix-style path list
+      new_paths=$(pathlist_win_to_unix "$value")             # Convert to unix-style paths, one per line
+      new_paths=${new_paths//$'\n'/:}                        # Join them into a path list
       new_paths=$(pathlist_normalize "${PATH}:${new_paths}") # Prepend the current PATH
       export_env 'WINDOWS_PATH' "$value"
       export_env 'PATH' "$new_paths"
@@ -443,21 +444,30 @@ function winpath() {
   esac
 }
 
-# Convert a windows-style path list to a unix-style path list
+# Convert a windows-style path list to unix-style paths, skipping empty entries
 # Inputs:
 #   $1: The windows-style path list to convert
 # Outputs:
-#   stdout: The converted unix-style path list
+#   stdout: The converted unix-style paths, one per line
 function pathlist_win_to_unix() {
   local win_paths=$1
 
-  local path_dir first=true
+  local path_dir entries=()
   while IFS= read -r -d';' path_dir; do
-    if [[ -z "$path_dir" ]]; then continue; fi
-
-    if [[ "$first" == 'true' ]]; then first=false; else printf ':'; fi
-    printf '%s' "$(unixpath "$path_dir")"
+    if [[ -n "$path_dir" ]]; then entries+=("$path_dir"); fi
   done <<<"${win_paths};"
+  if [[ "${#entries[@]}" -eq 0 ]]; then return; fi
+
+  case "$bash_platform" in
+  win_wsl)
+    # wslpath converts a single path, and fails for some entries (e.g. on an unmounted drive): skip them
+    for path_dir in "${entries[@]}"; do unixpath "$path_dir" || true; done
+    ;;
+  *)
+    # A single cygpath call for all the entries (same options as unixpath)
+    cygpath -u -a -- "${entries[@]}"
+    ;;
+  esac
 }
 
 # Normalize a unix-style path list, removing duplicates and empty entries
