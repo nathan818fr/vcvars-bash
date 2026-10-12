@@ -80,6 +80,7 @@ function brackets() {
   assert_equal "$(cmdesc 'x64')" 'x64'
   assert_equal "$(cmdesc 'a b&c|d^e%f"g<h>i(j)k!l')" 'a^ b^&c^|d^^e^%f^"g^<h^>i^(j^)k^!l'
   assert_equal "$(cmdesc 'C:\VS\vcvarsall.bat')" 'C^:^\VS^\vcvarsall^.bat'
+  assert_equal "$(cmdesc '')" ''
 }
 
 ### find_vcvarsall
@@ -179,7 +180,7 @@ function stub_path_tools() {
   assert_equal "$(winpath '/c/a')" 'cygpath -w -a -l -- /c/a'
 }
 
-### pathlist_normalize / pathlist_win_to_unix / fix_crlf
+### pathlist_normalize / pathlist_win_to_unix
 
 @test "pathlist_normalize: removes duplicates and empty entries, keeps order" {
   assert_equal "$(pathlist_normalize '/a::/b:/a:/c:')" '/a:/b:/c'
@@ -217,10 +218,6 @@ function stub_path_tools() {
   [[ ! -e "$CYGPATH_CALLS_FILE" ]]
 }
 
-@test "fix_crlf: removes trailing CR only" {
-  assert_equal "$(printf 'a\r\nb\rc\r\n' | fix_crlf)" $'a\nb\rc'
-}
-
 ### run_vcvarsall
 
 # Use a private TMPDIR and replace cmd (cmd.exe) with a stub that logs its calls to CMD_CALLS_FILE and prints its
@@ -240,16 +237,22 @@ function stub_cmd() {
   }
 }
 
-# Expected output of: run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
-CMD_ARGS='C^:^\VS^\vcvarsall^.bat
-x64
-a^ b
-&&
-set'
+# Arguments the cmd stub receives from: run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
+CMD_ARGS=('C^:^\VS^\vcvarsall^.bat' 'x64' 'a^ b' '&&' 'set')
 
-@test "run_vcvarsall: escapes the path, removes CR, and deletes its temporary file" {
+# Check an output of run_vcvarsall, ignoring CRs: "$(...)" removes them on MSYS2-based platforms (Git Bash, MSYS2)
+function assert_cmd_output() {
+  assert_equal "${1//$'\r'/}" "$(printf '%s\n' "${CMD_ARGS[@]}")"
+}
+
+@test "run_vcvarsall: escapes the path, keeps the output unchanged, and deletes its temporary file" {
   stub_cmd
-  assert_equal "$(run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b')" "$CMD_ARGS"
+  # Read the output from a file, not with "$(...)" (see assert_cmd_output)
+  local output expected
+  (run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b') >"${BATS_TEST_TMPDIR}/output"
+  IFS= read -r -d '' output <"${BATS_TEST_TMPDIR}/output" || true
+  printf -v expected '%s\r\n' "${CMD_ARGS[@]}"
+  assert_equal "$output" "$expected"
   assert_equal "$(ls -A -- "$TMPDIR")" ''
 }
 
@@ -258,7 +261,7 @@ set'
   STUB_BACKGROUND_SECONDS=5
   local start=$SECONDS output
   output=$(run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b')
-  assert_equal "$output" "$CMD_ARGS"
+  assert_cmd_output "$output"
   ((SECONDS - start < 3))
 }
 
@@ -267,7 +270,7 @@ set'
   TMPDIR="${BATS_TEST_TMPDIR}/missing"
   VCVARSBASH_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
   assert_equal "$status" 0
-  assert_equal "$output" "$CMD_ARGS"
+  assert_cmd_output "$output"
   assert_equal "$stderr" 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe'
 }
 
@@ -284,14 +287,14 @@ set'
   }
   run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
   assert_equal "$status" 0
-  assert_equal "$output" "$CMD_ARGS"
+  assert_cmd_output "$output"
   assert_equal "$(wc -l <"$CMD_CALLS_FILE")" 1
   [[ "$stderr" == *'No such file or directory'* ]]
 }
 
 ### parse_vcvarsall_env
 
-# Short "vcvarsall.bat && set" output (after fix_crlf), see also fixtures/vcvarsall-x64.txt
+# Short "vcvarsall.bat && set" output (with LF line endings), see also fixtures/vcvarsall-x64.txt
 VCVARSALL_BANNER='**********************************************************************
 ** Visual Studio 2022 Developer Command Prompt v17.0
 ** Copyright (c) 2022 Microsoft Corporation
@@ -329,9 +332,7 @@ export VS170COMNTOOLS='C:\\VS\\Tools\\'"
 @test "parse_vcvarsall_env: exports the MSVC variables of a full vcvarsall.bat output" {
   stub_path_conversion
   script_mode=default
-  local fixture
-  fixture=$(fix_crlf <"${BATS_TEST_DIRNAME}/fixtures/vcvarsall-x64.txt")
-  run --separate-stderr parse_vcvarsall_env <<<"$fixture"
+  run --separate-stderr parse_vcvarsall_env <"${BATS_TEST_DIRNAME}/fixtures/vcvarsall-x64.txt"
   assert_equal "$status" 0
   assert_equal "$(grep -o '^export [A-Z0-9_]*' <<<"$output")" 'export COMMANDPROMPTTYPE
 export DEVENVDIR
@@ -376,6 +377,18 @@ export WINDOWSSDKVERBINPATH
 export WINDOWSSDKVERSION
 export WINDOWSSDK_EXECUTABLEPATH_X64
 export WINDOWSSDK_EXECUTABLEPATH_X86'
+}
+
+@test "parse_vcvarsall_env: CRLF line endings give the same result as LF" {
+  stub_path_conversion
+  script_mode=default
+  PATH=/usr/bin:/bin
+  run --separate-stderr parse_vcvarsall_env <<<"$VCVARSALL_OUTPUT"
+  local lf_output=$output lf_stderr=$stderr
+  run --separate-stderr parse_vcvarsall_env <<<"${VCVARSALL_OUTPUT//$'\n'/$'\r\n'}"$'\r'
+  assert_equal "$status" 0
+  assert_equal "$stderr" "$lf_stderr"
+  assert_equal "$output" "$lf_output"
 }
 
 @test "parse_vcvarsall_env: banner lines are printed verbatim" {

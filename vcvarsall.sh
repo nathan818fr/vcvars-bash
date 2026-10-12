@@ -27,7 +27,7 @@ function detect_platform() {
 
 function detect_mode() {
   # Detect the mode depending on the name called
-  if [[ "$(basename -- "$0")" == vcvarsrun* ]]; then
+  if [[ "${0##*/}" == vcvarsrun* ]]; then
     declare -gr script_mode='run' # vcvarsrun.sh
   else
     declare -gr script_mode='default' # vcvarsall.sh
@@ -86,7 +86,7 @@ Environment variables:
 EOF
   local vcvarsall
   vcvarsall=$(find_vcvarsall)
-  printf '\nvcvarsall.bat arguments: %s\n' "$({ cmd "$(cmdesc "$vcvarsall")" -help </dev/null 2>/dev/null || true; } | fix_crlf | sed '/^Syntax:/d; s/^    vcvarsall.bat //')"
+  printf '\nvcvarsall.bat arguments: %s\n' "$({ cmd "$(cmdesc "$vcvarsall")" -help </dev/null 2>/dev/null || true; } | sed 's/\r$//; /^Syntax:/d; s/^    vcvarsall.bat //')"
 }
 
 function main() {
@@ -134,7 +134,7 @@ function main() {
 
 # Filter MSVC environment variables from the vcvarsall.bat output and export them
 # Inputs:
-#   stdin: The output of "vcvarsall.bat && set" (with LF line endings)
+#   stdin: The output of "vcvarsall.bat && set" (with CRLF or LF line endings)
 #   script_mode: 'default' to write export commands, 'run' to export variables in the current shell
 #   VCVARS_SILENT: If 1, print the vcvarsall.bat messages only on failure
 # Outputs:
@@ -172,6 +172,7 @@ function parse_vcvarsall_env() {
 
   local line name value initialized=false suppressed_output=()
   while IFS= read -r line; do
+    line=${line%$'\r'}
     if [[ "$initialized" == 'false' ]]; then
       if [[ "$line" == *' Environment initialized for: '* ]]; then initialized=true; fi
       if [[ "${VCVARS_SILENT:-}" == 1 ]]; then
@@ -249,7 +250,8 @@ function find_vcvarsall() {
       printf 'debug:  [ %s ]\n' "${vswhereargs[@]}" >&2
     fi
 
-    vsinstalldir=$("$vswhere" "${vswhereargs[@]}" </dev/null | fix_crlf)
+    vsinstalldir=$("$vswhere" "${vswhereargs[@]}" </dev/null)
+    vsinstalldir=${vsinstalldir%$'\r'}
     if [[ -z "$vsinstalldir" ]]; then
       printf 'error: vswhere returned an empty installation path\n' >&2
       return 1
@@ -265,7 +267,7 @@ function find_vcvarsall() {
 #   $1: The windows-style path to vcvarsall.bat
 #   $2...: The vcvarsall.bat arguments (escaped with cmdesc)
 # Outputs:
-#   stdout: The output of "vcvarsall.bat && set" (with LF line endings)
+#   stdout: The output of "vcvarsall.bat && set" (with CRLF line endings)
 function run_vcvarsall() {
   local vcvarsall
   vcvarsall=$(cmdesc "$1")
@@ -278,7 +280,9 @@ function run_vcvarsall() {
     # shellcheck disable=SC2064 # expand now: output_file is local
     trap "rm -f -- $(printf '%q' "$output_file")" EXIT
     if { cmd "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } >"$output_file"; then
-      fix_crlf <"$output_file"
+      local output
+      IFS= read -r -d '' output <"$output_file" || true # read until EOF
+      printf '%s' "$output"
       return
     fi
   fi
@@ -287,7 +291,7 @@ function run_vcvarsall() {
   if [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
     printf 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe\n' >&2
   fi
-  { cmd "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } | fix_crlf
+  cmd "$vcvarsall" "$@" '&&' 'set' </dev/null || true
 }
 
 # Split command arguments into an array, with a simple logic
@@ -387,8 +391,12 @@ function cmd() {
 # Outputs:
 #   stdout: The escaped argument
 function cmdesc() {
-  # shellcheck disable=SC2001
-  sed 's/[^0-9A-Za-z]/^\0/g' <<<"$1"
+  local str=$1 escaped='' i c
+  for ((i = 0; i < ${#str}; i++)); do
+    c=${str:i:1}
+    if [[ "$c" == [0-9A-Za-z] ]]; then escaped+=$c; else escaped+="^$c"; fi
+  done
+  printf '%s\n' "$escaped"
 }
 
 # Convert path to an absolute unix-style path
@@ -488,15 +496,6 @@ function pathlist_normalize() {
     if [[ "$first" == 'true' ]]; then first=false; else printf ':'; fi
     printf '%s' "$path_dir"
   done <<<"${unix_paths}:"
-}
-
-# Convert CRLF to LF
-# Inputs:
-#   stdin: The input to convert
-# Outputs:
-#   stdout: The converted input
-function fix_crlf() {
-  sed 's/\r$//'
 }
 
 eval 'main "$@";exit "$?"'
