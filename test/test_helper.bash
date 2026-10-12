@@ -8,9 +8,25 @@ function load_vcvarsall() {
   eval "$code"
 }
 
-# Replace unixpath and winpath (which need wslpath/cygpath) with minimal stand-ins:
-# "C:\a\b" <-> "/c/a/b", other paths are kept as-is
+# Replace unixpath, winpath and the path list conversion (which need wslpath/cygpath) with minimal stand-ins:
+# "C:\a\b" <-> "/c/a/b", other paths are kept as-is.
+# The platform is set to Cygwin-like, and the cygpath calls are logged to CYGPATH_CALLS_FILE.
 function stub_path_conversion() {
+  # shellcheck disable=SC2034 # used by the tested functions
+  bash_platform=win_cyg
+  CYGPATH_CALLS_FILE="${BATS_TEST_TMPDIR}/cygpath.calls"
+  # shellcheck disable=SC2329
+  function cygpath() {
+    if [[ "$#" -lt 4 || "$1 $2 $3" != '-u -a --' ]]; then
+      printf 'unexpected cygpath call: %s\n' "$*" >&2
+      return 1
+    fi
+    shift 3
+    printf '[%s]' "$@" >>"$CYGPATH_CALLS_FILE"
+    printf '\n' >>"$CYGPATH_CALLS_FILE"
+    local path_dir
+    for path_dir in "$@"; do unixpath "$path_dir"; done
+  }
   # shellcheck disable=SC2329
   function unixpath() {
     local path=$1

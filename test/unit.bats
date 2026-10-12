@@ -187,9 +187,34 @@ function stub_path_tools() {
   assert_equal "$(pathlist_normalize '')" ''
 }
 
-@test "pathlist_win_to_unix: converts each entry, skips empty ones" {
+@test "pathlist_win_to_unix: Cygwin-like platforms convert all the entries with a single cygpath call" {
   stub_path_conversion
-  assert_equal "$(pathlist_win_to_unix 'C:\VS\bin;;D:\My Tools;')" '/c/VS/bin:/d/My Tools'
+  assert_equal "$(pathlist_win_to_unix 'C:\VS\bin;;D:\My Tools;')" $'/c/VS/bin\n/d/My Tools'
+  assert_equal "$(<"$CYGPATH_CALLS_FILE")" '[C:\VS\bin][D:\My Tools]'
+}
+
+@test "pathlist_win_to_unix: WSL converts each entry" {
+  stub_path_conversion
+  bash_platform=win_wsl
+  assert_equal "$(pathlist_win_to_unix 'C:\VS\bin;;D:\My Tools;')" $'/c/VS/bin\n/d/My Tools'
+  [[ ! -e "$CYGPATH_CALLS_FILE" ]]
+}
+
+@test "pathlist_win_to_unix: WSL skips entries that can't be converted" {
+  stub_path_conversion
+  bash_platform=win_wsl
+  # shellcheck disable=SC2329
+  function unixpath() {
+    if [[ "$1" == 'D:\'* ]]; then return 1; fi # like wslpath on an unmounted drive
+    printf '/c/%s\n' "${1:3}"
+  }
+  assert_equal "$(pathlist_win_to_unix 'C:\VS;D:\Missing;C:\Tools')" $'/c/VS\n/c/Tools'
+}
+
+@test "pathlist_win_to_unix: an empty list gives an empty result" {
+  stub_path_conversion
+  assert_equal "$(pathlist_win_to_unix ';;')" ''
+  [[ ! -e "$CYGPATH_CALLS_FILE" ]]
 }
 
 @test "fix_crlf: removes trailing CR only" {
