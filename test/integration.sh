@@ -6,7 +6,8 @@ shopt -s inherit_errexit
 # Must be run on Windows from a supported Bash (Git Bash, MSYS2, Cygwin, WSL).
 # Each test runs in its own process, from a temporary directory.
 #
-# Note: cl options use the "-" form, as "/" ones get mangled by MSYS path conversion.
+# Note: cl is called as cl.exe, as WSL does not add the extension, and its options use the "-" form, as "/" ones
+# get mangled by MSYS path conversion.
 
 # Paths
 root=$(realpath -- "$(dirname -- "$0")/..")
@@ -48,7 +49,7 @@ function test_eval_exports_msvc_env() {
   assert 'LIB is set' test -n "${LIB:-}"
   assert 'WINDOWS_PATH is set' test -n "${WINDOWS_PATH:-}"
   assert "VSCMD_ARG_TGT_ARCH is x64 (${VSCMD_ARG_TGT_ARCH:-})" test "${VSCMD_ARG_TGT_ARCH:-}" == x64
-  assert 'cl is in PATH' command -v cl
+  assert 'cl.exe is in PATH' command -v cl.exe
   local dups
   dups=$(tr ':' '\n' <<<"$PATH" | sort | uniq -d)
   assert "PATH has no duplicates (${dups})" test -z "$dups"
@@ -58,14 +59,14 @@ function test_eval_exports_msvc_env() {
 function test_compile_and_run() {
   local arch=$1 bits=$2
   eval "$(vcvarsall "$arch")"
-  cl -nologo -EHsc "-Fehello_${arch}.exe" hello.cpp
+  cl.exe -nologo -EHsc "-Fehello_${arch}.exe" hello.cpp
   local out
   out=$("./hello_${arch}.exe" | tr -d '\r')
   assert "hello_${arch}.exe prints 'hello ${bits}' (${out})" test "$out" == "hello ${bits}"
 }
 
 function test_vcvarsrun_compile() {
-  vcvarsrun x64 -- cl -nologo -EHsc -Fehello_run.exe hello.cpp
+  vcvarsrun x64 -- cl.exe -nologo -EHsc -Fehello_run.exe hello.cpp
   assert 'hello_run.exe exists' test -f hello_run.exe
 }
 
