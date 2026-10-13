@@ -23,15 +23,69 @@ function brackets() {
   assert_equal "$bash_platform" 'win_cyg'
 }
 
-@test "detect_platform: WSL" {
+# Replace is_wsl_kernel with a stub returning the given status (0: WSL kernel)
+function stub_wsl_kernel() {
+  STUB_WSL_KERNEL_STATUS=$1
+  # shellcheck disable=SC2329
+  function is_wsl_kernel() { return "$STUB_WSL_KERNEL_STATUS"; }
+}
+
+# Write a kernel release file, and print its path
+function osrelease() {
+  printf '%s\n' "$1" >"${BATS_TEST_TMPDIR}/osrelease"
+  printf '%s\n' "${BATS_TEST_TMPDIR}/osrelease"
+}
+
+# Put a fake cmd.exe first in PATH
+function fake_cmd_exe() {
+  mkdir -p -- "${BATS_TEST_TMPDIR}/bin"
+  printf '#!/bin/sh\n' >"${BATS_TEST_TMPDIR}/bin/cmd.exe"
+  chmod +x -- "${BATS_TEST_TMPDIR}/bin/cmd.exe"
+  PATH="${BATS_TEST_TMPDIR}/bin:${PATH}"
+}
+
+@test "detect_platform: WSL, from WSL_DISTRO_NAME" {
+  fake_cmd_exe
   OSTYPE=linux-gnu WSL_DISTRO_NAME=Ubuntu detect_platform
   assert_equal "$bash_platform" 'win_wsl'
 }
 
+@test "detect_platform: WSL, from the kernel release (e.g. in an SSH session)" {
+  fake_cmd_exe
+  stub_wsl_kernel 0
+  OSTYPE=linux-gnu WSL_DISTRO_NAME='' detect_platform
+  assert_equal "$bash_platform" 'win_wsl'
+}
+
+@test "detect_platform: WSL without cmd.exe in PATH fails with a hint" {
+  OSTYPE=linux-gnu WSL_DISTRO_NAME=Ubuntu PATH=/usr/bin:/bin run --separate-stderr detect_platform
+  assert_equal "$status" 1
+  assert_equal "${stderr_lines[0]}" 'error: cmd.exe not found in PATH'
+  [[ "${stderr_lines[1]}" == 'hint: The Windows PATH is missing '* ]]
+}
+
 @test "detect_platform: other platforms are rejected" {
+  stub_wsl_kernel 1
   OSTYPE=linux-gnu WSL_DISTRO_NAME='' run detect_platform
   assert_equal "$status" 1
   assert_equal "${lines[0]}" 'error: Unsupported platform (linux-gnu)'
+}
+
+@test "is_wsl_kernel: matches the kernel releases with a -microsoft part" {
+  local release
+  for release in '4.4.0-26100-Microsoft' '4.19.43-microsoft-standard' '6.18.40.1-microsoft-standard-WSL2'; do
+    is_wsl_kernel "$(osrelease "$release")" || {
+      echo "not detected: $release" >&2
+      return 1
+    }
+  done
+  for release in '6.8.0-45-generic' '6.1.0-notmicrosoft'; do
+    if is_wsl_kernel "$(osrelease "$release")"; then
+      echo "false positive: $release" >&2
+      return 1
+    fi
+  done
+  run ! is_wsl_kernel "${BATS_TEST_TMPDIR}/missing"
 }
 
 ### parse_args_simple

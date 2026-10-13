@@ -8,17 +8,28 @@ shopt -s inherit_errexit
 
 declare -r VERSION='2026-10-10.1'
 
+# Detect the platform
+# Outputs:
+#   bash_platform: 'win_cyg' (Git Bash, MSYS2, Cygwin) or 'win_wsl'
 function detect_platform() {
   case "${OSTYPE:-}" in
   cygwin* | msys* | win32)
     declare -gr bash_platform='win_cyg'
     ;;
   *)
-    if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    # WSL sets WSL_DISTRO_NAME in the sessions it starts, but not in others (e.g. SSH sessions)
+    if [[ -n "${WSL_DISTRO_NAME:-}" ]] || is_wsl_kernel; then
       declare -gr bash_platform='win_wsl'
     else
       printf 'error: Unsupported platform (%s)\n' "${OSTYPE:-}" >&2
       printf 'hint: This script only supports Bash on Windows (Git Bash, WSL, etc.)\n' >&2
+      return 1
+    fi
+
+    if ! type -P cmd.exe >/dev/null; then
+      printf 'error: cmd.exe not found in PATH\n' >&2
+      printf 'hint: The Windows PATH is missing (e.g. SSH session, appendWindowsPath=false)\n' >&2
+      printf 'hint: Add the Windows system directory to PATH, e.g. /mnt/c/Windows/System32\n' >&2
       return 1
     fi
     ;;
@@ -496,6 +507,16 @@ function pathlist_normalize() {
     if [[ "$first" == 'true' ]]; then first=false; else printf ':'; fi
     printf '%s' "$path_dir"
   done <<<"${unix_paths}:"
+}
+
+# Check whether the kernel is a WSL one, from its release (see https://github.com/microsoft/WSL/issues/423)
+# Inputs:
+#   $1: The kernel release file (default: /proc/sys/kernel/osrelease)
+function is_wsl_kernel() {
+  local release
+  read -r release 2>/dev/null <"${1:-/proc/sys/kernel/osrelease}" || return 1
+  release=${release,,}
+  [[ "$release" == *-microsoft || "$release" == *-microsoft-* ]]
 }
 
 eval 'main "$@";exit "$?"'
