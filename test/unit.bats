@@ -287,8 +287,8 @@ function stub_path_tools() {
 ### run_vcvarsall
 
 # Use a private TMPDIR and replace cmd (cmd.exe) with a stub that logs its calls to CMD_CALLS_FILE and prints its
-# arguments with CRLF line endings. If STUB_BACKGROUND_SECONDS is set, the stub also leaves a background process
-# holding its stdout open, like the VS telemetry.
+# arguments with CRLF line endings, in UTF-16 with -u (like cmd.exe /u). If STUB_BACKGROUND_SECONDS is set, the stub
+# also leaves a background process holding its stdout open, like the VS telemetry.
 function stub_cmd() {
   export TMPDIR="${BATS_TEST_TMPDIR}/tmp"
   mkdir -p -- "$TMPDIR"
@@ -296,7 +296,12 @@ function stub_cmd() {
   # shellcheck disable=SC2329
   function cmd() {
     printf '%s\n' "$*" >>"$CMD_CALLS_FILE"
-    printf '%s\r\n' "$@"
+    if [[ "$1" == '-u' ]]; then
+      shift
+      printf '%s\r\n' "$@" | iconv -f UTF-8 -t UTF-16LE
+    else
+      printf '%s\r\n' "$@"
+    fi
     if [[ -n "${STUB_BACKGROUND_SECONDS:-}" ]]; then
       sleep "$STUB_BACKGROUND_SECONDS" 2>/dev/null 3>&- & # fd 3 closed: bats waits for it
     fi
@@ -311,15 +316,61 @@ function assert_cmd_output() {
   assert_equal "${1//$'\r'/}" "$(printf '%s\n' "${CMD_ARGS[@]}")"
 }
 
-@test "run_vcvarsall: escapes the path, keeps the output unchanged, and deletes its temporary file" {
-  stub_cmd
-  # Read the output from a file, not with "$(...)" (see assert_cmd_output)
+# Use iconv to convert the UTF-16 output of cmd.exe, or skip the test if it is not available
+function with_iconv() {
+  command -v iconv >/dev/null || skip 'iconv not found'
+}
+
+# Behave as if iconv was not available, even if it is
+function without_iconv() {
+  # shellcheck disable=SC2329
+  function utf16_to_utf8_supported() { return 1; }
+}
+
+# Check an output file of run_vcvarsall, byte for byte (not read with "$(...)", see assert_cmd_output)
+function assert_cmd_output_file() {
   local output expected
-  (run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b') >"${BATS_TEST_TMPDIR}/output"
-  IFS= read -r -d '' output <"${BATS_TEST_TMPDIR}/output" || true
+  IFS= read -r -d '' output <"$1" || true
   printf -v expected '%s\r\n' "${CMD_ARGS[@]}"
   assert_equal "$output" "$expected"
+}
+
+@test "run_vcvarsall: with iconv, converts the UTF-16 output, and deletes its temporary file" {
+  with_iconv
+  stub_cmd
+  (run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b') >"${BATS_TEST_TMPDIR}/output"
+  assert_cmd_output_file "${BATS_TEST_TMPDIR}/output"
+  [[ "$(<"$CMD_CALLS_FILE")" == '-u '* ]]
   assert_equal "$(ls -A -- "$TMPDIR")" ''
+}
+
+@test "run_vcvarsall: without iconv, keeps the output unchanged, and deletes its temporary file" {
+  without_iconv
+  stub_cmd
+  (VCVARSBASH_DEBUG=1 run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b') \
+    >"${BATS_TEST_TMPDIR}/output" 2>"${BATS_TEST_TMPDIR}/stderr"
+  assert_cmd_output_file "${BATS_TEST_TMPDIR}/output"
+  [[ "$(<"$CMD_CALLS_FILE")" != '-u '* ]]
+  assert_equal "$(<"${BATS_TEST_TMPDIR}/stderr")" 'debug: iconv not found, non-ASCII characters may be mangled'
+  assert_equal "$(ls -A -- "$TMPDIR")" ''
+}
+
+@test "run_vcvarsall: with iconv, keeps the non-ASCII characters" {
+  with_iconv
+  stub_cmd
+  local output
+  output=$(run_vcvarsall 'C:\VS\vcvarsall.bat' 'Café' '日本')
+  assert_equal "${output//$'\r'/}" $'C^:^\\VS^\\vcvarsall^.bat\nCafé\n日本\n&&\nset'
+}
+
+@test "run_vcvarsall: with iconv, fails with a clear error if the output is not valid UTF-16" {
+  with_iconv
+  stub_cmd
+  # shellcheck disable=SC2329
+  function cmd() { printf 'X'; } # a single byte
+  run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64'
+  assert_equal "$status" 1
+  assert_equal "${stderr_lines[-1]}" 'error: cannot convert the cmd.exe output from UTF-16'
 }
 
 @test "run_vcvarsall: does not wait for background processes holding the output open" {
@@ -331,13 +382,26 @@ function assert_cmd_output() {
   ((SECONDS - start < 3))
 }
 
-@test "run_vcvarsall: falls back to a pipe when no temporary file can be created" {
+@test "run_vcvarsall: with iconv, falls back to a pipe when no temporary file can be created" {
+  with_iconv
   stub_cmd
   TMPDIR="${BATS_TEST_TMPDIR}/missing"
   VCVARSBASH_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
   assert_equal "$status" 0
   assert_cmd_output "$output"
-  assert_equal "$stderr" 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe'
+  [[ "$(<"$CMD_CALLS_FILE")" == '-u '* ]]
+  assert_equal "${stderr_lines[-1]}" 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe'
+}
+
+@test "run_vcvarsall: without iconv, falls back to a pipe when no temporary file can be created" {
+  without_iconv
+  stub_cmd
+  TMPDIR="${BATS_TEST_TMPDIR}/missing"
+  VCVARSBASH_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
+  assert_equal "$status" 0
+  assert_cmd_output "$output"
+  [[ "$(<"$CMD_CALLS_FILE")" != '-u '* ]]
+  assert_equal "${stderr_lines[-1]}" 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe'
 }
 
 @test "run_vcvarsall: falls back to a pipe when the temporary file can't be written, running cmd once" {

@@ -315,16 +315,18 @@ function run_vcvarsall() {
   vcvarsall=$(cmdesc "$1")
   shift
 
+  if ! utf16_to_utf8_supported && [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
+    printf 'debug: iconv not found, non-ASCII characters may be mangled\n' >&2
+  fi
+
   # Prefer a temporary file to a pipe: VsDevCmd.bat sends telemetry from a background PowerShell (START /B) that
   # inherits cmd.exe's stdout, so a pipe would only be closed when it exits, several seconds after vcvarsall.bat.
   local output_file
   if output_file=$(mktemp -t vcvars-bash.XXXXXXXXXX 2>/dev/null); then
     # shellcheck disable=SC2064 # expand now: output_file is local
     trap "rm -f -- $(printf '%q' "$output_file")" EXIT
-    if { cmd "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } >"$output_file"; then
-      local output
-      IFS= read -r -d '' output <"$output_file" || true # read until EOF
-      printf '%s' "$output"
+    if { cmd_unicode "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } >"$output_file"; then
+      cmd_unicode_to_utf8 <"$output_file"
       return
     fi
   fi
@@ -333,7 +335,7 @@ function run_vcvarsall() {
   if [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
     printf 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe\n' >&2
   fi
-  cmd "$vcvarsall" "$@" '&&' 'set' </dev/null || true
+  { cmd_unicode "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } | cmd_unicode_to_utf8
 }
 
 # Split command arguments into an array, with a simple logic
@@ -417,24 +419,59 @@ function parse_args_simple() {
 
 # Run a command with cmd.exe
 # Inputs:
+#   $1: -u to get the output of the cmd.exe internal commands (e.g. echo, set) in UTF-16, instead of the console code
+#       page (e.g. 437) which mangles the non-ASCII characters (optional)
 #   $@: The command string to run (use cmdesc to escape arguments when needed)
 # Outputs:
 #   stdout: The cmd.exe standard output
 #   stderr: The cmd.exe error output
 function cmd() {
+  local options=()
+  if [[ "${1:-}" == '-u' ]]; then
+    options=(/u)
+    shift
+  fi
+
   if [[ "$bash_platform" == 'win_wsl' ]]; then
     # When started from a Linux directory, cmd.exe prints a warning ("UNC paths are not supported") and falls back to
     # the Windows directory. So start it from its own directory instead, which is a Windows one
     # (e.g. /mnt/c/Windows/System32).
     local cmd_exe
     cmd_exe=$(type -P cmd.exe)
-    (cd -- "${cmd_exe%/*}" && cmd.exe /s /c " ; $* ")
+    (cd -- "${cmd_exe%/*}" && cmd.exe "${options[@]}" /s /c " ; $* ")
     return
   fi
 
   # This seems to work fine on all supported platforms
   # (even with all the weird path and argument conversions on MSYS-like)
-  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd.exe /s /c " ; $* "
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd.exe "${options[@]}" /s /c " ; $* "
+}
+
+# Shortcut for "cmd -u" when supported, otherwise "cmd" (convert its output with cmd_unicode_to_utf8)
+function cmd_unicode() {
+  if utf16_to_utf8_supported; then
+    cmd -u "$@"
+  else
+    cmd "$@"
+  fi
+}
+
+# Convert an output of cmd_unicode to UTF-8 (unchanged if it is not in UTF-16)
+# Inputs:
+#   stdin: The cmd_unicode output
+# Outputs:
+#   stdout: The converted output
+function cmd_unicode_to_utf8() {
+  if utf16_to_utf8_supported; then
+    if ! utf16_to_utf8; then
+      printf 'error: cannot convert the cmd.exe output from UTF-16\n' >&2
+      return 1
+    fi
+  else
+    local output
+    IFS= read -r -d '' output || true # read until EOF
+    printf '%s' "$output"
+  fi
 }
 
 # Escape a cmd.exe command argument
@@ -582,6 +619,28 @@ function wslenv_merge() {
 
   for entry in "$@"; do merged+="${entry}:"; done
   printf '%s\n' "${merged%:}"
+}
+
+# Convert UTF-16 (little-endian) to UTF-8
+# Inputs:
+#   stdin: The UTF-16 input
+# Outputs:
+#   stdout: The UTF-8 output
+function utf16_to_utf8() {
+  iconv -f UTF-16LE -t UTF-8
+}
+
+# Check whether utf16_to_utf8 is supported (iconv is available)
+# The result is cached on the first call.
+function utf16_to_utf8_supported() {
+  if [[ -z "${_utf16_to_utf8_supported:-}" ]]; then
+    if type -P iconv >/dev/null; then
+      declare -g _utf16_to_utf8_supported=true
+    else
+      declare -g _utf16_to_utf8_supported=false
+    fi
+  fi
+  [[ "$_utf16_to_utf8_supported" == 'true' ]]
 }
 
 eval 'main "$@";exit "$?"'
