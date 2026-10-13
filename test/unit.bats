@@ -8,7 +8,9 @@ setup() {
   load test_helper
   load_vcvarsall
   # Ignore the user's settings (e.g. VSINSTALLDIR is set after "eval $(vcvarsall.sh x64)")
-  unset VCVARS_SILENT VCVARSBASH_DEBUG VSINSTALLDIR VSWHEREARGS VSWHEREPATH
+  unset VCVARS_SILENT VCVARS_WSL_SHARE_PATH VCVARSBASH_DEBUG VSINSTALLDIR VSWHEREARGS VSWHEREPATH WSLENV
+  # Run the platform-dependent code as on Cygwin-like platforms, unless a test changes it
+  bash_platform=win_cyg
 }
 
 # Print an array as "[a][b]..." to compare it in one assertion
@@ -346,6 +348,15 @@ function assert_cmd_output() {
   [[ "$stderr" == *'No such file or directory'* ]]
 }
 
+### wslenv_merge
+
+@test "wslenv_merge: keeps the other entries, and replaces the ones for the same variables" {
+  assert_equal "$(wslenv_merge 'WT_SESSION::INCLUDE/p:Lib/l:PATH/l' 'INCLUDE/w' 'LIB/w' 'Path/w')" \
+    'WT_SESSION:INCLUDE/w:LIB/w:Path/w'
+  assert_equal "$(wslenv_merge 'WT_SESSION:INCLUDE/w' 'INCLUDE/w')" 'WT_SESSION:INCLUDE/w'
+  assert_equal "$(wslenv_merge '' 'INCLUDE/w')" 'INCLUDE/w'
+}
+
 ### parse_vcvarsall_env
 
 # Short "vcvarsall.bat && set" output (with LF line endings), see also fixtures/vcvarsall-x64.txt
@@ -381,6 +392,30 @@ export VSCMD_ARG_TGT_ARCH='x64'
 export VSINSTALLDIR='C:\\VS\\'
 export WINDOWSSDKDIR='C:\\SDK\\'
 export VS170COMNTOOLS='C:\\VS\\Tools\\'"
+}
+
+# Exported variables of VCVARSALL_OUTPUT, as WSLENV entries
+WSLENV_ENTRIES='INCLUDE/w:LIB/w:VSCMD_ARG_TGT_ARCH/w:VSINSTALLDIR/w:WINDOWSSDKDIR/w:VS170COMNTOOLS/w'
+
+@test "parse_vcvarsall_env: on WSL, adds the exported variables to WSLENV" {
+  stub_path_conversion
+  bash_platform=win_wsl
+  script_mode=default
+  PATH=/usr/bin:/bin
+  WSLENV=WT_SESSION run --separate-stderr parse_vcvarsall_env <<<"$VCVARSALL_OUTPUT"
+  assert_equal "$status" 0
+  assert_equal "${lines[-1]}" "export WSLENV='WT_SESSION:${WSLENV_ENTRIES}'"
+}
+
+@test "parse_vcvarsall_env: on WSL, VCVARS_WSL_SHARE_PATH=1 also passes the PATH to Windows programs, as Path" {
+  stub_path_conversion
+  bash_platform=win_wsl
+  script_mode=default
+  PATH=/usr/bin:/bin
+  VCVARS_WSL_SHARE_PATH=1 run --separate-stderr parse_vcvarsall_env <<<"$VCVARSALL_OUTPUT"
+  assert_equal "$status" 0
+  assert_equal "${lines[-2]}" "export Path='C:\\VS\\bin;C:\\Windows;C:\\VS\\bin'"
+  assert_equal "${lines[-1]}" "export WSLENV='${WSLENV_ENTRIES}:Path/w'"
 }
 
 @test "parse_vcvarsall_env: exports the MSVC variables of a full vcvarsall.bat output" {
