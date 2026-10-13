@@ -29,9 +29,12 @@ function main() {
   check failed 'vcvarsrun.sh preserves arguments and exit status' test_vcvarsrun_args_and_status
   check failed 'vcvarsall.bat options reach it unchanged' test_vcvarsall_options
   check failed 'special characters survive the round trip' test_special_chars_roundtrip
+  check failed 'non-ASCII characters survive the round trip' test_non_ascii_chars_roundtrip
   check failed 'stdin is not consumed' test_stdin_not_consumed
   check failed 'VSWHEREPATH, VSWHEREARGS and VSINSTALLDIR are honored' test_install_options
   check failed 'invalid usages fail' test_invalid_usages
+  check failed 'WSL: no warning from a Linux directory' test_wsl_no_unc_warning
+  check failed 'WSL: VCVARS_WSL_SHARE_PATH passes the PATH to Windows programs' test_wsl_share_path
 
   if [[ "${#failed[@]}" -gt 0 ]]; then
     printf '\nerror: %d test(s) failed:\n' "${#failed[@]}" >&2
@@ -93,10 +96,12 @@ function test_vcvarsall_options() {
 
 # VSCMD_* variables are kept, so an inherited one goes through the whole pipeline
 function test_special_chars_roundtrip() {
-  local value="it's \$HOME \`id\` a=b ; trailing\\"
-  export VSCMD_TEST_VALUE="$value"
-  eval "$(vcvarsall x64)"
-  assert "value is preserved (${VSCMD_TEST_VALUE})" test "$VSCMD_TEST_VALUE" == "$value"
+  check_roundtrip "it's \$HOME \`id\` a=b ; trailing\\"
+}
+
+function test_non_ascii_chars_roundtrip() {
+  type -P iconv >/dev/null || skip 'iconv not found'
+  check_roundtrip 'Café José 日本 €'
 }
 
 function test_stdin_not_consumed() {
@@ -123,6 +128,22 @@ function test_install_options() {
   VSINSTALLDIR='C:\nonexistent' assert_status 1 vcvarsall x64
 }
 
+function test_wsl_no_unc_warning() {
+  [[ "$OSTYPE" == linux* ]] || skip 'not on WSL'
+  cd -- "$HOME" # a Linux directory
+  local stderr
+  stderr=$(vcvarsall x64 2>&1 >/dev/null)
+  assert "no UNC warning (${stderr})" test "$stderr" == "${stderr/UNC paths/}"
+}
+
+function test_wsl_share_path() {
+  [[ "$OSTYPE" == linux* ]] || skip 'not on WSL'
+  eval "$(VCVARS_WSL_SHARE_PATH=1 vcvarsall x64)"
+  local found
+  found=$(cmd.exe /c where cl 2>/dev/null | tr -d '\r')
+  assert "a Windows program finds cl.exe in its PATH (${found})" test "${found##*\\}" == 'cl.exe'
+}
+
 function test_invalid_usages() {
   assert_status 1 vcvarsall
   assert_status 1 vcvarsall x64 --
@@ -134,6 +155,27 @@ function test_invalid_usages() {
 
 ### Helpers
 
+# Export a variable so that Windows programs get it (on WSL, add it to WSLENV), then check that vcvarsall.sh exports
+# it back from the vcvarsall.bat environment, unchanged
+# Inputs:
+#   $1: The value to check
+function check_roundtrip() {
+  local value=$1
+  export VSCMD_TEST_VALUE="$value"
+  if [[ "$OSTYPE" == linux* ]]; then export WSLENV="${WSLENV:+${WSLENV}:}VSCMD_TEST_VALUE/w"; fi
+  local exports
+  exports=$(vcvarsall x64)
+  assert 'VSCMD_TEST_VALUE is exported' grep -q '^export VSCMD_TEST_VALUE=' <<<"$exports"
+  eval "$exports"
+  assert "value is preserved (${VSCMD_TEST_VALUE})" test "$VSCMD_TEST_VALUE" == "$value"
+}
+
+# Skip the current test, with a reason (see check)
+function skip() {
+  printf 'skip: %s\n' "$1"
+  exit 77
+}
+
 # Run a test and print its result, adding its name to the array named by $1 when it fails.
 # Never call it from a condition: the test runs as a background job so that it gets its own
 # process with errexit active, which is not the case when the caller is in a condition.
@@ -142,8 +184,12 @@ function check() {
   local name=$2
   shift 2
   "$@" >test.log 2>&1 &
-  if wait "$!"; then
+  local status=0
+  wait "$!" || status=$?
+  if [[ "$status" -eq 0 ]]; then
     printf 'ok - %s\n' "$name"
+  elif [[ "$status" -eq 77 ]]; then
+    printf 'ok - %s # %s\n' "$name" "$(sed -n 's/^skip: /skip /p' -- test.log | tail -n 1)"
   else
     printf 'not ok - %s\n' "$name"
     sed 's/^/  # /' -- test.log
