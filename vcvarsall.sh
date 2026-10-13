@@ -422,6 +422,16 @@ function parse_args_simple() {
 #   stdout: The cmd.exe standard output
 #   stderr: The cmd.exe error output
 function cmd() {
+  if [[ "$bash_platform" == 'win_wsl' ]]; then
+    # When started from a Linux directory, cmd.exe prints a warning ("UNC paths are not supported") and falls back to
+    # the Windows directory. So start it from its own directory instead, which is a Windows one
+    # (e.g. /mnt/c/Windows/System32).
+    local cmd_exe
+    cmd_exe=$(type -P cmd.exe)
+    (cd -- "${cmd_exe%/*}" && cmd.exe /s /c " ; $* ")
+    return
+  fi
+
   # This seems to work fine on all supported platforms
   # (even with all the weird path and argument conversions on MSYS-like)
   MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd.exe /s /c " ; $* "

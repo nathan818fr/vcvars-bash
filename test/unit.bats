@@ -38,10 +38,10 @@ function osrelease() {
   printf '%s\n' "${BATS_TEST_TMPDIR}/osrelease"
 }
 
-# Put a fake cmd.exe first in PATH
+# Put a fake cmd.exe first in PATH, running the given shell commands (if any)
 function fake_cmd_exe() {
   mkdir -p -- "${BATS_TEST_TMPDIR}/bin"
-  printf '#!/bin/sh\n' >"${BATS_TEST_TMPDIR}/bin/cmd.exe"
+  printf '#!/bin/sh\n%s\n' "${1:-}" >"${BATS_TEST_TMPDIR}/bin/cmd.exe"
   chmod +x -- "${BATS_TEST_TMPDIR}/bin/cmd.exe"
   PATH="${BATS_TEST_TMPDIR}/bin:${PATH}"
 }
@@ -128,6 +128,16 @@ function fake_cmd_exe() {
   run parse_args_simple '-a "b c'
   assert_equal "$status" 1
   assert_equal "$output" 'error: Unfinished quoted argument: b c '
+}
+
+### cmd
+
+@test "cmd: on WSL, runs cmd.exe from its own directory, not the current one" {
+  fake_cmd_exe 'pwd'
+  bash_platform=win_wsl
+  mkdir -- "${BATS_TEST_TMPDIR}/linux" && cd -- "${BATS_TEST_TMPDIR}/linux"
+  assert_equal "$(cmd 'set')" "${BATS_TEST_TMPDIR}/bin"
+  assert_equal "$PWD" "${BATS_TEST_TMPDIR}/linux"
 }
 
 ### cmdesc
