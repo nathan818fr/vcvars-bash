@@ -79,6 +79,11 @@ Environment variables:
     initialization fails).
     Default: 0
 
+  VCVARS_WSL_SHARE_PATH
+    WSL only. If set to 1, also pass the PATH to the Windows programs (e.g. so
+    that a Windows cmake.exe finds cl.exe), through a "Path" variable.
+    Default: 0
+
   VSINSTALLDIR
     The path to the Visual Studio installation directory.
     Example: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community"
@@ -168,20 +173,25 @@ function parse_vcvarsall_env() {
   #  xxx=1
 
   declare -A seen_vars
+  local windows_vars=() # The exported variables to pass to Windows programs (see WSLENV below)
   function export_env() {
     local name=${1^^}
     local value=$2
     if [[ ! "$name" =~ ^[A-Z0-9_]+$ ]]; then return; fi
     if [[ -n "${seen_vars[$name]:-}" ]]; then return; fi
     seen_vars[$name]=1
+    if [[ "$name" != @(PATH|WINDOWS_PATH|WSLENV) ]]; then windows_vars+=("$name"); fi
+    export_var "$name" "$value"
+  }
+  function export_var() {
     if [[ "$script_mode" == 'run' ]]; then
-      export "${name}=${value}"
+      export "${1}=${2}"
     else
-      printf "export %s='%s'\n" "$name" "${value//\'/\'\\\'\'}"
+      printf "export %s='%s'\n" "$1" "${2//\'/\'\\\'\'}"
     fi
   }
 
-  local line name value initialized=false suppressed_output=()
+  local line name value initialized=false suppressed_output=() windows_path=''
   while IFS= read -r line; do
     line=${line%$'\r'}
     if [[ "$initialized" == 'false' ]]; then
@@ -214,6 +224,7 @@ function parse_vcvarsall_env() {
       new_paths=$(pathlist_normalize "${PATH}:${new_paths}") # Prepend the current PATH
       export_env 'WINDOWS_PATH' "$value"
       export_env 'PATH' "$new_paths"
+      windows_path=$value
       ;;
     esac
   done
@@ -225,6 +236,26 @@ function parse_vcvarsall_env() {
     done
     printf 'error: vcvarsall.bat failed\n' >&2
     return 1
+  fi
+
+  # On WSL, Windows programs (e.g. cl.exe) only get the Linux variables listed in WSLENV.
+  # So add the exported ones there, only from WSL to Windows ("/w"), replacing their previous entries.
+  #
+  # PATH is not added: WSL would replace the Windows PATH with a translation of the whole Linux one.
+  # So Windows programs keep their own PATH, without the MSVC tools...
+  #
+  # VCVARS_WSL_SHARE_PATH=1 works around it: export the Windows PATH from vcvarsall.bat as "Path", and add "Path/w" to
+  # WSLENV. Linux variable names are case-sensitive, so it doesn't change the Linux PATH. But Windows ones are not, so
+  # Windows programs get it as their PATH. This relies on how WSL merges the environments, which is not documented:
+  # hence the flag.
+  if [[ "$bash_platform" == 'win_wsl' ]]; then
+    local entries=()
+    for name in "${windows_vars[@]}"; do entries+=("${name}/w"); done
+    if [[ "${VCVARS_WSL_SHARE_PATH:-}" == 1 && -n "$windows_path" ]]; then
+      export_var 'Path' "$windows_path" # not export_env, which uppercases the names
+      entries+=('Path/w')
+    fi
+    export_env 'WSLENV' "$(wslenv_merge "${WSLENV:-}" "${entries[@]}")"
   fi
 }
 
@@ -517,6 +548,30 @@ function is_wsl_kernel() {
   read -r release 2>/dev/null <"${1:-/proc/sys/kernel/osrelease}" || return 1
   release=${release,,}
   [[ "$release" == *-microsoft || "$release" == *-microsoft-* ]]
+}
+
+# Add entries to a WSLENV value, replacing the previous ones for the same variables
+# Inputs:
+#   $1: The WSLENV value
+#   $2...: The entries to add (e.g. "INCLUDE/w")
+# Outputs:
+#   stdout: The new WSLENV value
+function wslenv_merge() {
+  local wslenv=$1 entry name merged=''
+  shift
+
+  declare -A replaced=()
+  for entry in "$@"; do
+    name=${entry%%/*}
+    replaced[${name^^}]=1
+  done
+  while IFS= read -r -d ':' entry; do
+    name=${entry%%/*}
+    if [[ -n "$entry" && -z "${replaced[${name^^}]:-}" ]]; then merged+="${entry}:"; fi
+  done <<<"${wslenv}:"
+
+  for entry in "$@"; do merged+="${entry}:"; done
+  printf '%s\n' "${merged%:}"
 }
 
 eval 'main "$@";exit "$?"'

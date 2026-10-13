@@ -60,6 +60,7 @@ function test_compile_and_run() {
   local arch=$1 bits=$2
   eval "$(vcvarsall "$arch")"
   cl.exe -nologo -EHsc "-Fehello_${arch}.exe" hello.cpp
+  chmod +x -- "hello_${arch}.exe" # not executable when written to the Linux filesystem from WSL
   local out
   out=$("./hello_${arch}.exe" | tr -d '\r')
   assert "hello_${arch}.exe prints 'hello ${bits}' (${out})" test "$out" == "hello ${bits}"
