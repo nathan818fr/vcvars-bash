@@ -77,6 +77,15 @@ All optional. Run `./vcvarsall.sh` without arguments for the full help.
 | `VSWHEREARGS`   | Arguments to select the installation with `vswhere.exe` (default: `-products *`) |
 | `VCVARS_SILENT` | Set to `1` to hide the `vcvarsall.bat` banner (still printed if it fails)        |
 
+## Testing
+
+Each change is tested on GitHub Actions:
+- **Unit tests** ([bats](https://github.com/bats-core/bats-core)), on Linux and on each Windows environment.
+- **Integration tests** against a real Visual Studio installation, on Git Bash, MSYS2, Cygwin and WSL2: compiling and running x64 and x86 programs, `vcvarsrun.sh`, round trips of special and non-ASCII characters, error cases.
+- **Lint** with ShellCheck and shfmt.
+
+Performance is also benchmarked (`test/bench.sh`) to compare versions and catch regressions: starting a process is slow on Git Bash, MSYS2 and Cygwin (which emulate `fork`), and even slower with an antivirus scanning each one, so every extra process the script runs can add a noticeable delay.
+
 ## Contributing
 
 See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for how to run the tests and linters.
