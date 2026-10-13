@@ -30,7 +30,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +41,8 @@ jobs:
             shell: msys2 {0}
           - name: cygwin
             shell: D:\cygwin\bin\bash.exe --noprofile --norc -eo pipefail -o igncr '{0}'
+          - name: wsl2
+            shell: wsl-bash {0}
     name: windows (${{ matrix.name }})
     defaults:
       run:
@@ -62,6 +64,11 @@ jobs:
         uses: cygwin/cygwin-install-action@v6
         with:
           install-dir: D:\cygwin
+      - if: matrix.name == 'wsl2'
+        uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
       - name: Unit tests
         run: bash .bats/bin/bats test/
       - name: Integration tests
