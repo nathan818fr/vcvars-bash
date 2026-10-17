@@ -8,7 +8,7 @@ setup() {
   load test_helper
   load_vcvarsall
   # Ignore the user's settings (e.g. VSINSTALLDIR is set after "eval $(vcvarsall.sh x64)")
-  unset VCVARS_SILENT VCVARS_WSL_SHARE_PATH VCVARSBASH_DEBUG VSINSTALLDIR VSWHEREARGS VSWHEREPATH WSLENV
+  unset VCVARS_SILENT VCVARS_WSL_SHARE_PATH VCVARS_DEBUG VSINSTALLDIR VSWHEREARGS VSWHEREPATH WSLENV
   # Run the platform-dependent code as on Cygwin-like platforms, unless a test changes it
   bash_platform=win_cyg
 }
@@ -194,13 +194,13 @@ EOF
   stub_path_conversion
   fake_vswhere
   unset VSWHEREPATH
-  VCVARSBASH_DEBUG=1 VSWHERE_OUTPUT='C:\VS' PATH="${BATS_TEST_TMPDIR}:${PATH}" \
+  VCVARS_DEBUG=1 VSWHERE_OUTPUT='C:\VS' PATH="${BATS_TEST_TMPDIR}:${PATH}" \
     run --separate-stderr find_vcvarsall
   assert_equal "$status" 0
   assert_equal "${stderr_lines[0]}" "debug: vswhere path: ${BATS_TEST_TMPDIR}/vswhere"
 
   # Only the debug line matters: vswhere may or may not be installed there
-  VCVARSBASH_DEBUG=1 PATH=/usr/bin:/bin run --separate-stderr find_vcvarsall
+  VCVARS_DEBUG=1 PATH=/usr/bin:/bin run --separate-stderr find_vcvarsall
   assert_equal "${stderr_lines[0]}" 'debug: vswhere path: /c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe'
 }
 
@@ -347,7 +347,7 @@ function assert_cmd_output_file() {
 @test "run_vcvarsall: without iconv, keeps the output unchanged, and deletes its temporary file" {
   without_iconv
   stub_cmd
-  (VCVARSBASH_DEBUG=1 run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b') \
+  (VCVARS_DEBUG=1 run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b') \
     >"${BATS_TEST_TMPDIR}/output" 2>"${BATS_TEST_TMPDIR}/stderr"
   assert_cmd_output_file "${BATS_TEST_TMPDIR}/output"
   [[ "$(<"$CMD_CALLS_FILE")" != '-u '* ]]
@@ -386,7 +386,7 @@ function assert_cmd_output_file() {
   with_iconv
   stub_cmd
   TMPDIR="${BATS_TEST_TMPDIR}/missing"
-  VCVARSBASH_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
+  VCVARS_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
   assert_equal "$status" 0
   assert_cmd_output "$output"
   [[ "$(<"$CMD_CALLS_FILE")" == '-u '* ]]
@@ -397,7 +397,7 @@ function assert_cmd_output_file() {
   without_iconv
   stub_cmd
   TMPDIR="${BATS_TEST_TMPDIR}/missing"
-  VCVARSBASH_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
+  VCVARS_DEBUG=1 run --separate-stderr run_vcvarsall 'C:\VS\vcvarsall.bat' 'x64' 'a^ b'
   assert_equal "$status" 0
   assert_cmd_output "$output"
   [[ "$(<"$CMD_CALLS_FILE")" != '-u '* ]]

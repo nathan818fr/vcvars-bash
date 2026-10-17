@@ -286,7 +286,7 @@ function find_vcvarsall() {
       vswhereargs+=(-products '*')
     fi
 
-    if [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
+    if [[ "${VCVARS_DEBUG:-}" == 1 ]]; then
       printf 'debug: vswhere path: %s\n' "$vswhere" >&2
       printf 'debug: vswhere args:\n' >&2
       printf 'debug:  [ %s ]\n' "${vswhereargs[@]}" >&2
@@ -315,7 +315,7 @@ function run_vcvarsall() {
   vcvarsall=$(cmdesc "$1")
   shift
 
-  if ! utf16_to_utf8_supported && [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
+  if ! utf16_to_utf8_supported && [[ "${VCVARS_DEBUG:-}" == 1 ]]; then
     printf 'debug: iconv not found, non-ASCII characters may be mangled\n' >&2
   fi
 
@@ -332,7 +332,7 @@ function run_vcvarsall() {
   fi
 
   # Fall back to a pipe if the temporary file can't be created or opened (the redirection fails before cmd.exe starts)
-  if [[ "${VCVARSBASH_DEBUG:-}" == 1 ]]; then
+  if [[ "${VCVARS_DEBUG:-}" == 1 ]]; then
     printf 'debug: cannot use a temporary file, reading the vcvarsall.bat output from a pipe\n' >&2
   fi
   { cmd_unicode "$vcvarsall" "$@" '&&' 'set' </dev/null || true; } | cmd_unicode_to_utf8
