@@ -25,6 +25,8 @@ function main() {
   check failed 'eval vcvarsall.sh exports the MSVC environment' test_eval_exports_msvc_env
   check failed 'compile and run (x64)' test_compile_and_run x64 64
   check failed 'compile and run (x86)' test_compile_and_run x86 32
+  check failed 'VCVARS_PATH_MODE=vcvars puts the toolchain first' test_path_mode_vcvars
+  check failed 'VCVARS_PATH_MODE=prepend, append and none' test_path_modes_others
   check failed 'vcvarsrun.sh compiles' test_vcvarsrun_compile
   check failed 'vcvarsrun.sh preserves arguments and exit status' test_vcvarsrun_args_and_status
   check failed 'vcvarsall.bat options reach it unchanged' test_vcvarsall_options
@@ -50,12 +52,42 @@ function test_eval_exports_msvc_env() {
   eval "$(vcvarsall x64)"
   assert 'INCLUDE is set' test -n "${INCLUDE:-}"
   assert 'LIB is set' test -n "${LIB:-}"
-  assert 'WINDOWS_PATH is set' test -n "${WINDOWS_PATH:-}"
+  assert 'VCVARS_ADDED_PATH is set' test -n "${VCVARS_ADDED_PATH:-}"
   assert "VSCMD_ARG_TGT_ARCH is x64 (${VSCMD_ARG_TGT_ARCH:-})" test "${VSCMD_ARG_TGT_ARCH:-}" == x64
   assert 'cl.exe is in PATH' command -v cl.exe
   local dups
   dups=$(tr ':' '\n' <<<"$PATH" | sort | uniq -d)
   assert "PATH has no duplicates (${dups})" test -z "$dups"
+}
+
+# The classic issue: Git Bash, MSYS2 and Cygwin have their own "link" (coreutils), which must not hide the MSVC one
+function test_path_mode_vcvars() {
+  eval "$(vcvarsall x64)"
+  assert "PATH starts with an added directory (${PATH%%:*})" test "${PATH%%:*}" == "${VCVARS_ADDED_PATH%%:*}"
+  if [[ "$OSTYPE" != linux* ]]; then # on WSL, the MSVC one is only found as link.exe
+    local link
+    link=$(command -v link)
+    assert "link is the MSVC one (${link})" grep -q '/VC/Tools/MSVC/' <<<"$link"
+  fi
+}
+
+function test_path_modes_others() {
+  local original=$PATH added
+  added=$(
+    eval "$(VCVARS_PATH_MODE=prepend vcvarsall x64)"
+    assert 'prepend: PATH starts with all the added directories' test "${PATH#"${VCVARS_ADDED_PATH}:"}" != "$PATH"
+    printf '%s' "$VCVARS_ADDED_PATH"
+  )
+  (
+    eval "$(VCVARS_PATH_MODE=append vcvarsall x64)"
+    assert 'append: PATH starts with the original one' test "${PATH%%:*}" == "${original%%:*}"
+    assert 'append: PATH ends with all the added directories' test "${PATH%":${VCVARS_ADDED_PATH}"}" != "$PATH"
+  )
+  (
+    eval "$(VCVARS_PATH_MODE=none vcvarsall x64)"
+    assert 'none: PATH is unchanged' test "$PATH" == "$original"
+    assert 'none: VCVARS_ADDED_PATH is the same' test "$VCVARS_ADDED_PATH" == "$added"
+  )
 }
 
 # Compile hello.cpp for an architecture, then check the bitness printed by the executable
@@ -151,6 +183,7 @@ function test_invalid_usages() {
   assert_status 1 vcvarsrun x64 --
   assert_status 1 vcvarsall bogusarch
   VSWHEREARGS='"unclosed' assert_status 1 vcvarsall x64
+  VCVARS_PATH_MODE=bogus assert_status 1 vcvarsall x64
 }
 
 ### Helpers

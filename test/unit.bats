@@ -8,7 +8,7 @@ setup() {
   load test_helper
   load_vcvarsall
   # Ignore the user's settings (e.g. VSINSTALLDIR is set after "eval $(vcvarsall.sh x64)")
-  unset VCVARS_SILENT VCVARS_WSL_SHARE_PATH VCVARS_DEBUG VSINSTALLDIR VSWHEREARGS VSWHEREPATH WSLENV
+  unset VCVARS_SILENT VCVARS_WSL_SHARE_PATH VCVARS_PATH_MODE VCVARS_ADDED_PATH VCVARS_DEBUG VSINSTALLDIR VSWHEREARGS VSWHEREPATH WSLENV
   # Run the platform-dependent code as on Cygwin-like platforms, unless a test changes it
   bash_platform=win_cyg
 }
@@ -246,7 +246,7 @@ function stub_path_tools() {
   assert_equal "$(winpath '/c/a')" 'cygpath -w -a -l -- /c/a'
 }
 
-### pathlist_normalize / pathlist_win_to_unix
+### pathlist_normalize / unixpaths
 
 @test "pathlist_normalize: removes duplicates and empty entries, keeps order" {
   assert_equal "$(pathlist_normalize '/a::/b:/a:/c:')" '/a:/b:/c'
@@ -254,20 +254,20 @@ function stub_path_tools() {
   assert_equal "$(pathlist_normalize '')" ''
 }
 
-@test "pathlist_win_to_unix: Cygwin-like platforms convert all the entries with a single cygpath call" {
+@test "unixpaths: Cygwin-like platforms convert all the paths with a single cygpath call" {
   stub_path_conversion
-  assert_equal "$(pathlist_win_to_unix 'C:\VS\bin;;D:\My Tools;')" $'/c/VS/bin\n/d/My Tools'
+  assert_equal "$(unixpaths 'C:\VS\bin' 'D:\My Tools')" $'/c/VS/bin\n/d/My Tools'
   assert_equal "$(<"$CYGPATH_CALLS_FILE")" '[C:\VS\bin][D:\My Tools]'
 }
 
-@test "pathlist_win_to_unix: WSL converts each entry" {
+@test "unixpaths: WSL converts each path" {
   stub_path_conversion
   bash_platform=win_wsl
-  assert_equal "$(pathlist_win_to_unix 'C:\VS\bin;;D:\My Tools;')" $'/c/VS/bin\n/d/My Tools'
+  assert_equal "$(unixpaths 'C:\VS\bin' 'D:\My Tools')" $'/c/VS/bin\n/d/My Tools'
   [[ ! -e "$CYGPATH_CALLS_FILE" ]]
 }
 
-@test "pathlist_win_to_unix: WSL skips entries that can't be converted" {
+@test "unixpaths: WSL gives an empty line for the paths that can't be converted" {
   stub_path_conversion
   bash_platform=win_wsl
   # shellcheck disable=SC2329
@@ -275,13 +275,146 @@ function stub_path_tools() {
     if [[ "$1" == 'D:\'* ]]; then return 1; fi # like wslpath on an unmounted drive
     printf '/c/%s\n' "${1:3}"
   }
-  assert_equal "$(pathlist_win_to_unix 'C:\VS;D:\Missing;C:\Tools')" $'/c/VS\n/c/Tools'
+  assert_equal "$(unixpaths 'C:\VS' 'D:\Missing' 'C:\Tools')" $'/c/VS\n\n/c/Tools'
 }
 
-@test "pathlist_win_to_unix: an empty list gives an empty result" {
+@test "unixpaths: no paths give an empty result" {
   stub_path_conversion
-  assert_equal "$(pathlist_win_to_unix ';;')" ''
+  assert_equal "$(unixpaths)" ''
   [[ ! -e "$CYGPATH_CALLS_FILE" ]]
+}
+
+### check_path_mode / build_path
+
+@test "check_path_mode: accepts the known modes, or none set" {
+  local mode
+  for mode in '' vcvars prepend append none; do
+    VCVARS_PATH_MODE=$mode check_path_mode
+  done
+}
+
+@test "check_path_mode: rejects other modes with a hint" {
+  VCVARS_PATH_MODE=Vcvars run --separate-stderr check_path_mode
+  assert_equal "$status" 1
+  assert_equal "$stderr" 'error: Invalid VCVARS_PATH_MODE: Vcvars
+hint: Use vcvars, prepend, append or none'
+}
+
+# A vcvarsall.bat PATH started from "C:\Windows": the toolchain before it, an extra after it
+BUILD_PATH_ARGS=('C:\VS\bin;C:\SDK\bin;C:\Windows;C:\VS\cmake' 'C:\Windows')
+
+@test "build_path: vcvars mode puts the toolchain before the current PATH, and the extras after it" {
+  stub_path_conversion
+  PATH=/usr/bin:/c/Windows
+  build_path "${BUILD_PATH_ARGS[@]}"
+  assert_equal "$result_path" '/c/VS/bin:/c/SDK/bin:/usr/bin:/c/Windows:/c/VS/cmake'
+  assert_equal "$result_added_path" '/c/VS/bin:/c/SDK/bin:/c/VS/cmake'
+  # A single cygpath call, for the added directories only
+  assert_equal "$(<"$CYGPATH_CALLS_FILE")" '[C:\VS\bin][C:\SDK\bin][C:\VS\cmake]'
+}
+
+@test "build_path: prepend mode puts all the added directories before the current PATH" {
+  stub_path_conversion
+  PATH=/usr/bin:/c/Windows
+  VCVARS_PATH_MODE=prepend build_path "${BUILD_PATH_ARGS[@]}"
+  assert_equal "$result_path" '/c/VS/bin:/c/SDK/bin:/c/VS/cmake:/usr/bin:/c/Windows'
+  assert_equal "$result_added_path" '/c/VS/bin:/c/SDK/bin:/c/VS/cmake'
+}
+
+@test "build_path: append mode puts all the added directories after the current PATH" {
+  stub_path_conversion
+  PATH=/usr/bin:/c/Windows
+  VCVARS_PATH_MODE=append build_path "${BUILD_PATH_ARGS[@]}"
+  assert_equal "$result_path" '/usr/bin:/c/Windows:/c/VS/bin:/c/SDK/bin:/c/VS/cmake'
+  assert_equal "$result_added_path" '/c/VS/bin:/c/SDK/bin:/c/VS/cmake'
+}
+
+@test "build_path: none mode keeps the current PATH as-is, but still gives the added directories" {
+  stub_path_conversion
+  PATH=/usr/bin::/usr/bin
+  VCVARS_PATH_MODE=none build_path "${BUILD_PATH_ARGS[@]}"
+  assert_equal "$result_path" '/usr/bin::/usr/bin'
+  assert_equal "$result_added_path" '/c/VS/bin:/c/SDK/bin:/c/VS/cmake'
+}
+
+@test "build_path: directories already in either PATH are not added, nor moved" {
+  stub_path_conversion
+  PATH=/usr/bin:/c/SDK/bin
+  # C:\Tools is compared as Windows does (ignoring the case and a trailing backslash), C:\SDK\bin as converted
+  build_path 'C:\VS\bin;c:\tools\;C:\SDK\bin;C:\Tools;C:\VS\bin;C:\VS\bin' 'C:\Tools'
+  assert_equal "$result_path" '/c/VS/bin:/usr/bin:/c/SDK/bin'
+  assert_equal "$result_added_path" '/c/VS/bin'
+}
+
+@test "build_path: nothing added gives an empty list, without converting anything" {
+  stub_path_conversion
+  PATH=/usr/bin
+  build_path 'C:\Windows' 'C:\Windows'
+  assert_equal "$result_path" '/usr/bin'
+  assert_equal "$result_added_path" ''
+  [[ ! -e "$CYGPATH_CALLS_FILE" ]]
+}
+
+@test "build_path: the PATH vcvarsall.bat started from can be empty, or end with a ';'" {
+  stub_path_conversion
+  PATH=/usr/bin
+  build_path 'C:\VS\bin;;C:\VS\cmake' ''
+  assert_equal "$result_path" '/usr/bin:/c/VS/bin:/c/VS/cmake' # unknown: appended
+  build_path 'C:\VS\bin;C:\Windows;;C:\VS\cmake' 'C:\Windows;'
+  assert_equal "$result_path" '/c/VS/bin:/usr/bin:/c/VS/cmake'
+}
+
+@test "build_path: without the PATH vcvarsall.bat started from, appends everything not in the current PATH" {
+  stub_path_conversion
+  PATH=/usr/bin:/c/Windows
+  local mode
+  for mode in vcvars prepend append; do
+    VCVARS_PATH_MODE=$mode build_path 'C:\VS\bin;C:\Windows;C:\VS\cmake' ''
+    assert_equal "${mode}: ${result_path}" "${mode}: /usr/bin:/c/Windows:/c/VS/bin:/c/VS/cmake"
+    VCVARS_PATH_MODE=$mode build_path 'C:\VS\bin;C:\Windows;C:\VS\cmake' 'C:\Other'
+    assert_equal "${mode}: ${result_path}" "${mode}: /usr/bin:/c/Windows:/c/VS/bin:/c/VS/cmake"
+  done
+  assert_equal "$result_added_path" '/c/VS/bin:/c/VS/cmake'
+  VCVARS_PATH_MODE=none build_path 'C:\VS\bin;C:\Windows;C:\VS\cmake' ''
+  assert_equal "$result_path" '/usr/bin:/c/Windows'
+
+  VCVARS_DEBUG=1 run --separate-stderr build_path 'C:\VS\bin' ''
+  assert_equal "$stderr" 'debug: PATH before vcvarsall.bat unknown, appending all its directories'
+}
+
+@test "build_path: on WSL, a directory that can't be converted doesn't shift the others" {
+  stub_path_conversion
+  bash_platform=win_wsl
+  # shellcheck disable=SC2329
+  function unixpath() {
+    if [[ "$1" == 'D:\'* ]]; then return 1; fi # like wslpath on an unmounted drive
+    printf '/mnt/c/%s\n' "${1:3}"
+  }
+  PATH=/usr/bin
+  build_path 'C:\VS;D:\Missing;C:\Windows;D:\Missing2;C:\Extra' 'C:\Windows'
+  assert_equal "$result_path" '/mnt/c/VS:/usr/bin:/mnt/c/Extra'
+}
+
+@test "build_path: splits a full vcvarsall.bat PATH, as vcvarsall.bat does" {
+  stub_path_conversion
+  local fixture windows_path windows_preinit_path
+  fixture=$(tr -d '\r' <"${BATS_TEST_DIRNAME}/fixtures/vcvarsall-x64.txt")
+  windows_path=$(sed -n 's/^PATH=//p' <<<"$fixture")
+  windows_preinit_path=$(sed -n 's/^__VSCMD_PREINIT_PATH=//p' <<<"$fixture")
+  PATH=/usr/bin:/bin
+  build_path "$windows_path" "$windows_preinit_path"
+  local vs='/c/Program Files/Microsoft Visual Studio/18/Enterprise'
+  local dirs
+  IFS=: read -ra dirs <<<"$result_path"
+  assert_equal "${#dirs[@]}" 23
+  assert_equal "${dirs[0]}" "${vs}/VC/Tools/MSVC/14.51.36231/bin/HostX64/x64"
+  assert_equal "${dirs[15]}" "${vs}/Common7/Tools/"
+  assert_equal "${dirs[16]}:${dirs[17]}" '/usr/bin:/bin'
+  assert_equal "${dirs[19]}" "${vs}/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
+  assert_equal "${dirs[22]}" "${vs}/VC/vcpkg"
+  local added
+  printf -v added '%s:' "${dirs[@]:0:16}" "${dirs[@]:18}" # all but the current PATH
+  assert_equal "$result_added_path" "${added%:}"
 }
 
 ### run_vcvarsall
@@ -460,12 +593,12 @@ VS170COMNTOOLS=C:\VS\Tools\'
   assert_equal "$stderr" "$VCVARSALL_BANNER"
   assert_equal "$output" "export INCLUDE='C:\\VS\\include;C:\\SDK\\include'
 export LIB='C:\\VS\\lib'
-export WINDOWS_PATH='C:\\VS\\bin;C:\\Windows;C:\\VS\\bin'
-export PATH='/usr/bin:/bin:/c/VS/bin:/c/Windows'
 export VSCMD_ARG_TGT_ARCH='x64'
 export VSINSTALLDIR='C:\\VS\\'
 export WINDOWSSDKDIR='C:\\SDK\\'
-export VS170COMNTOOLS='C:\\VS\\Tools\\'"
+export VS170COMNTOOLS='C:\\VS\\Tools\\'
+export PATH='/c/VS/bin:/usr/bin:/bin'
+export VCVARS_ADDED_PATH='/c/VS/bin'"
 }
 
 # Exported variables of VCVARSALL_OUTPUT, as WSLENV entries
@@ -512,8 +645,6 @@ export INCLUDE
 export LIB
 export LIBPATH
 export NETFXSDKDIR
-export WINDOWS_PATH
-export PATH
 export PLATFORM
 export UCRTVERSION
 export UNIVERSALCRTSDKDIR
@@ -539,7 +670,9 @@ export WINDOWSSDKLIBVERSION
 export WINDOWSSDKVERBINPATH
 export WINDOWSSDKVERSION
 export WINDOWSSDK_EXECUTABLEPATH_X64
-export WINDOWSSDK_EXECUTABLEPATH_X86'
+export WINDOWSSDK_EXECUTABLEPATH_X86
+export PATH
+export VCVARS_ADDED_PATH'
 }
 
 @test "parse_vcvarsall_env: CRLF line endings give the same result as LF" {
@@ -616,8 +749,8 @@ VSCMD_TEST=${value}"
   parse_vcvarsall_env <<<"$VCVARSALL_OUTPUT" >"${BATS_TEST_TMPDIR}/stdout" 2>/dev/null
   assert_equal "$(<"${BATS_TEST_TMPDIR}/stdout")" ''
   assert_equal "$INCLUDE" 'C:\VS\include;C:\SDK\include'
-  assert_equal "$PATH" '/usr/bin:/bin:/c/VS/bin:/c/Windows'
-  assert_equal "$WINDOWS_PATH" 'C:\VS\bin;C:\Windows;C:\VS\bin'
+  assert_equal "$PATH" '/c/VS/bin:/usr/bin:/bin'
+  assert_equal "$VCVARS_ADDED_PATH" '/c/VS/bin'
   assert_equal "$(printenv VSCMD_ARG_TGT_ARCH)" 'x64'
   assert_equal "${ALLUSERSPROFILE:-unset}" 'unset'
 }

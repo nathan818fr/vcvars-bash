@@ -70,12 +70,16 @@ Examples:
 
 All optional. Run `./vcvarsall.sh` without arguments for the full help.
 
-| Variable        | Description                                                                      |
-|-----------------|----------------------------------------------------------------------------------|
-| `VSINSTALLDIR`  | Visual Studio installation to use (default: the latest found by `vswhere.exe`)   |
-| `VSWHEREPATH`   | Path to `vswhere.exe` (default: from `PATH`, then its standard location)         |
-| `VSWHEREARGS`   | Arguments to select the installation with `vswhere.exe` (default: `-products *`) |
-| `VCVARS_SILENT` | Set to `1` to hide the `vcvarsall.bat` banner (still printed if it fails)        |
+| Variable           | Description                                                                                                       |
+|--------------------|-------------------------------------------------------------------------------------------------------------------|
+| `VSINSTALLDIR`     | Visual Studio installation to use (default: the latest found by `vswhere.exe`)                                    |
+| `VSWHEREPATH`      | Path to `vswhere.exe` (default: from `PATH`, then its standard location)                                          |
+| `VSWHEREARGS`      | Arguments to select the installation with `vswhere.exe` (default: `-products *`)                                  |
+| `VCVARS_SILENT`    | Set to `1` to hide the `vcvarsall.bat` banner (still printed if it fails)                                         |
+| `VCVARS_PATH_MODE` | Where to add the MSVC directories to `PATH`: `vcvars` (default, as `vcvarsall.bat`), `prepend`, `append` or `none` |
+
+By default, `PATH` is changed as `vcvarsall.bat` does: the toolchain goes before your `PATH`, so that e.g. the `link` of Git Bash, MSYS2 and Cygwin doesn't hide the MSVC one, and the extras (e.g. the CMake and Ninja bundled with Visual Studio) go after it, so that yours are still used.
+The added directories are also exported as `VCVARS_ADDED_PATH`.
 
 ## Testing
 

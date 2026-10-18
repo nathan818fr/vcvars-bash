@@ -79,6 +79,18 @@ Environment variables:
     initialization fails).
     Default: 0
 
+  VCVARS_PATH_MODE
+    Where to add the vcvarsall.bat directories to PATH:
+    - vcvars: as vcvarsall.bat does, the toolchain before the current PATH,
+      and the extras (e.g. the CMake and Ninja bundled with Visual Studio)
+      after it
+    - prepend: all of them before the current PATH
+    - append: all of them after the current PATH
+    - none: leave PATH unchanged (see VCVARS_ADDED_PATH)
+    With Visual Studio versions that don't tell where the current PATH is in
+    the vcvarsall.bat one, "vcvars" and "prepend" fall back to "append".
+    Default: vcvars
+
   VCVARS_WSL_SHARE_PATH
     WSL only. If set to 1, also pass the PATH to the Windows programs (e.g. so
     that a Windows cmake.exe finds cl.exe), through a "Path" variable.
@@ -99,6 +111,11 @@ Environment variables:
     The arguments to pass to vswhere.exe.
     This value is always automatically prefixed with "-latest -property installationPath".
     Default: "-products *"
+
+Exported variables (in addition to the vcvarsall.bat ones):
+  VCVARS_ADDED_PATH
+    The directories added by vcvarsall.bat (not already in PATH), as a path
+    list, whatever VCVARS_PATH_MODE is.
 EOF
   local vcvarsall
   vcvarsall=$(find_vcvarsall)
@@ -108,6 +125,7 @@ EOF
 function main() {
   detect_platform
   detect_mode
+  check_path_mode
 
   # Parse arguments
   if [[ $# -eq 0 ]]; then
@@ -153,6 +171,8 @@ function main() {
 #   stdin: The output of "vcvarsall.bat && set" (with CRLF or LF line endings)
 #   script_mode: 'default' to write export commands, 'run' to export variables in the current shell
 #   VCVARS_SILENT: If 1, print the vcvarsall.bat messages only on failure
+#   PATH, VCVARS_PATH_MODE: The current PATH, and how to add the vcvarsall.bat directories to it (see build_path)
+#   VCVARS_WSL_SHARE_PATH: If 1, also pass the vcvarsall.bat PATH to Windows programs on WSL, as Path
 # Outputs:
 #   stdout: The export commands (in 'default' mode)
 #   stderr: The vcvarsall.bat messages (everything up to the "Environment initialized" line)
@@ -180,7 +200,7 @@ function parse_vcvarsall_env() {
     if [[ ! "$name" =~ ^[A-Z0-9_]+$ ]]; then return; fi
     if [[ -n "${seen_vars[$name]:-}" ]]; then return; fi
     seen_vars[$name]=1
-    if [[ "$name" != @(PATH|WINDOWS_PATH|WSLENV) ]]; then windows_vars+=("$name"); fi
+    if [[ "$name" != @(PATH|VCVARS_ADDED_PATH|WSLENV) ]]; then windows_vars+=("$name"); fi
     export_var "$name" "$value"
   }
   function export_var() {
@@ -191,7 +211,7 @@ function parse_vcvarsall_env() {
     fi
   }
 
-  local line name value initialized=false suppressed_output=() windows_path=''
+  local line name value initialized=false suppressed_output=() windows_path windows_preinit_path
   while IFS= read -r line; do
     line=${line%$'\r'}
     if [[ "$initialized" == 'false' ]]; then
@@ -217,14 +237,11 @@ function parse_vcvarsall_env() {
       export_env "$name" "$value"
       ;;
     PATH)
-      # PATH is a special case, requiring special handling
-      local new_paths
-      new_paths=$(pathlist_win_to_unix "$value")             # Convert to unix-style paths, one per line
-      new_paths=${new_paths//$'\n'/:}                        # Join them into a path list
-      new_paths=$(pathlist_normalize "${PATH}:${new_paths}") # Prepend the current PATH
-      export_env 'WINDOWS_PATH' "$value"
-      export_env 'PATH' "$new_paths"
-      windows_path=$value
+      # Exported after the loop, as it needs __VSCMD_PREINIT_PATH (see build_path)
+      if [[ -z "${windows_path+set}" ]]; then windows_path=$value; fi
+      ;;
+    __VSCMD_PREINIT_PATH)
+      if [[ -z "${windows_preinit_path+set}" ]]; then windows_preinit_path=$value; fi
       ;;
     esac
   done
@@ -236,6 +253,12 @@ function parse_vcvarsall_env() {
     done
     printf 'error: vcvarsall.bat failed\n' >&2
     return 1
+  fi
+
+  if [[ -n "${windows_path+set}" ]]; then
+    build_path "$windows_path" "${windows_preinit_path:-}"
+    export_env 'PATH' "$result_path"
+    export_env 'VCVARS_ADDED_PATH' "$result_added_path"
   fi
 
   # On WSL, Windows programs (e.g. cl.exe) only get the Linux variables listed in WSLENV.
@@ -251,12 +274,107 @@ function parse_vcvarsall_env() {
   if [[ "$bash_platform" == 'win_wsl' ]]; then
     local entries=()
     for name in "${windows_vars[@]}"; do entries+=("${name}/w"); done
-    if [[ "${VCVARS_WSL_SHARE_PATH:-}" == 1 && -n "$windows_path" ]]; then
+    if [[ "${VCVARS_WSL_SHARE_PATH:-}" == 1 && -n "${windows_path:-}" ]]; then
       export_var 'Path' "$windows_path" # not export_env, which uppercases the names
       entries+=('Path/w')
     fi
     export_env 'WSLENV' "$(wslenv_merge "${WSLENV:-}" "${entries[@]}")"
   fi
+}
+
+# Check that VCVARS_PATH_MODE is valid
+function check_path_mode() {
+  case "${VCVARS_PATH_MODE:-}" in
+  '' | vcvars | prepend | append | none) ;;
+  *)
+    printf 'error: Invalid VCVARS_PATH_MODE: %s\n' "$VCVARS_PATH_MODE" >&2
+    printf 'hint: Use vcvars, prepend, append or none\n' >&2
+    return 1
+    ;;
+  esac
+}
+
+# Build the new PATH from the vcvarsall.bat one, as set by VCVARS_PATH_MODE
+# vcvarsall.bat prepends the toolchain to the PATH it started from, and appends some extras (e.g. the CMake and Ninja
+# bundled with Visual Studio). VsDevCmd.bat saves that PATH in __VSCMD_PREINIT_PATH, which tells them apart.
+# The added directories are the vcvarsall.bat ones that were neither in that PATH nor in the current one.
+# Inputs:
+#   $1: The windows-style PATH from vcvarsall.bat
+#   $2: The windows-style PATH vcvarsall.bat started from (__VSCMD_PREINIT_PATH), or empty if unknown
+#   PATH: The current PATH
+#   VCVARS_PATH_MODE: vcvars (default), prepend, append or none
+# Outputs:
+#   result_path: The new PATH
+#   result_added_path: The added directories, as a unix-style path list
+function build_path() {
+  local windows_path=$1 windows_preinit_path=$2 mode=${VCVARS_PATH_MODE:-vcvars}
+
+  # Split the vcvarsall.bat PATH around the one it started from
+  local before after
+  if [[ -n "$windows_preinit_path" && ";${windows_path};" == *";${windows_preinit_path};"* ]]; then
+    before=";${windows_path};"
+    before=${before%%";${windows_preinit_path};"*}
+    after=";${windows_path};"
+    after=${after#*";${windows_preinit_path};"}
+  else
+    # Unknown (e.g. older Visual Studio versions): append everything, which can't hide the shell tools
+    if [[ "${VCVARS_DEBUG:-}" == 1 ]]; then
+      printf 'debug: PATH before vcvarsall.bat unknown, appending all its directories\n' >&2
+    fi
+    before=''
+    after=$windows_path
+    if [[ "$mode" != 'none' ]]; then mode=append; fi
+  fi
+
+  # Keep the directories that were not in the PATH vcvarsall.bat started from (compared as Windows does, ignoring
+  # the case and a trailing backslash)
+  declare -A preinit_dirs=()
+  local dir key
+  while IFS= read -r -d ';' dir; do
+    key=${dir,,}
+    key=${key%\\}
+    if [[ -n "$key" ]]; then preinit_dirs[$key]=1; fi
+  done <<<"${windows_preinit_path};"
+
+  local sides=("$before" "$after") side entries=() before_count=0
+  for side in 0 1; do
+    while IFS= read -r -d ';' dir; do
+      key=${dir,,}
+      key=${key%\\}
+      if [[ -n "$key" && -z "${preinit_dirs[$key]:-}" ]]; then entries+=("$dir"); fi
+    done <<<"${sides[side]};"
+    if [[ "$side" == 0 ]]; then before_count=${#entries[@]}; fi
+  done
+
+  # Convert them, skipping the ones already in the current PATH, and the duplicates
+  local converted=()
+  if [[ "${#entries[@]}" -gt 0 ]]; then
+    local output
+    output=$(unixpaths "${entries[@]}")
+    mapfile -t converted <<<"$output"
+  fi
+
+  declare -A seen_dirs=()
+  while IFS= read -r -d ':' dir; do
+    if [[ -n "$dir" ]]; then seen_dirs[$dir]=1; fi
+  done <<<"${PATH}:"
+
+  local i before_dirs='' after_dirs=''
+  for ((i = 0; i < ${#entries[@]}; i++)); do
+    dir=${converted[i]:-}
+    if [[ -z "$dir" || -n "${seen_dirs[$dir]:-}" ]]; then continue; fi
+    seen_dirs[$dir]=1
+    if ((i < before_count)); then before_dirs+="${dir}:"; else after_dirs+="${dir}:"; fi
+  done
+
+  case "$mode" in
+  vcvars) result_path=$(pathlist_normalize "${before_dirs}${PATH}:${after_dirs}") ;;
+  prepend) result_path=$(pathlist_normalize "${before_dirs}${after_dirs}${PATH}") ;;
+  append) result_path=$(pathlist_normalize "${PATH}:${before_dirs}${after_dirs}") ;;
+  none) result_path=$PATH ;;
+  esac
+  result_added_path=${before_dirs}${after_dirs}
+  result_added_path=${result_added_path%:}
 }
 
 # Locate vcvarsall.bat
@@ -541,28 +659,23 @@ function winpath() {
   esac
 }
 
-# Convert a windows-style path list to unix-style paths, skipping empty entries
+# Convert windows-style paths to absolute unix-style paths
 # Inputs:
-#   $1: The windows-style path list to convert
+#   $@: The paths to convert
 # Outputs:
-#   stdout: The converted unix-style paths, one per line
-function pathlist_win_to_unix() {
-  local win_paths=$1
-
-  local path_dir entries=()
-  while IFS= read -r -d';' path_dir; do
-    if [[ -n "$path_dir" ]]; then entries+=("$path_dir"); fi
-  done <<<"${win_paths};"
-  if [[ "${#entries[@]}" -eq 0 ]]; then return; fi
+#   stdout: The converted paths, one per line (an empty line for those that can't be converted)
+function unixpaths() {
+  if [[ "$#" -eq 0 ]]; then return; fi
 
   case "$bash_platform" in
   win_wsl)
-    # wslpath converts a single path, and fails for some entries (e.g. on an unmounted drive): skip them
-    for path_dir in "${entries[@]}"; do unixpath "$path_dir" || true; done
+    # wslpath converts a single path, and fails for some (e.g. on an unmounted drive)
+    local path
+    for path in "$@"; do unixpath "$path" || printf '\n'; done
     ;;
   *)
-    # A single cygpath call for all the entries (same options as unixpath)
-    cygpath -u -a -- "${entries[@]}"
+    # A single cygpath call for all the paths (same options as unixpath)
+    cygpath -u -a -- "$@"
     ;;
   esac
 }
