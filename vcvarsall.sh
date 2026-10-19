@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 shopt -s inherit_errexit
 
-declare -r VERSION='2026-10-13.1'
+declare -r VERSION='2026-10-19.1'
 
 # Detect the platform
 # Outputs:
