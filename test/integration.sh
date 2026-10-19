@@ -63,6 +63,11 @@ function test_eval_exports_msvc_env() {
 
 # The classic issue: Git Bash, MSYS2 and Cygwin have their own "link" (coreutils), which must not hide the MSVC one
 function test_path_mode_vcvars() {
+  # Without __VSCMD_PREINIT_PATH, the PATH split would fall back to appending everything
+  local debug
+  debug=$(VCVARS_DEBUG=1 vcvarsall x64 2>&1 >/dev/null)
+  assert 'the PATH vcvarsall.bat started from is known' test "${debug/PATH before vcvarsall.bat unknown/}" == "$debug"
+
   eval "$(vcvarsall x64)"
   assert "PATH starts with an added directory (${PATH%%:*})" test "${PATH%%:*}" == "${VCVARS_ADDED_PATH%%:*}"
   if [[ "$OSTYPE" != linux* ]]; then # on WSL, the MSVC one is only found as link.exe

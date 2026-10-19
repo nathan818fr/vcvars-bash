@@ -85,7 +85,9 @@ The added directories are also exported as `VCVARS_ADDED_PATH`, and removed from
 
 Each change is tested on GitHub Actions:
 - **Unit tests** ([bats](https://github.com/bats-core/bats-core)), on Linux and on each Windows environment.
-- **Integration tests** against a real Visual Studio installation, on Git Bash, MSYS2, Cygwin and WSL2: compiling and running x64 and x86 programs, `vcvarsrun.sh`, round trips of special and non-ASCII characters, error cases.
+- **Integration tests** against a real Visual Studio installation, on Git Bash, MSYS2, Cygwin and WSL2: compiling and running x64 and x86 programs, `vcvarsrun.sh`, round trips of special and non-ASCII characters, error cases. Also with the Build Tools of Visual Studio 2017, 2019 and 2022.
+
+Everything also runs monthly, to catch the updates of Visual Studio, the shells and the runners.
 - **Lint** with ShellCheck and shfmt.
 
 Performance is also benchmarked (`test/bench.sh`) to compare versions and catch regressions: starting a process is slow on Git Bash, MSYS2 and Cygwin (which emulate `fork`), and even slower with an antivirus scanning each one, so every extra process the script runs can add a noticeable delay.

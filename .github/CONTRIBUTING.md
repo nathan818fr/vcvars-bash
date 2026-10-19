@@ -10,7 +10,8 @@ mise run fmt          # format the scripts
 mise run integration  # integration tests (Windows only, needs Visual Studio)
 ```
 
-All of them run on GitHub Actions for each push and pull request.
+All of them run on GitHub Actions for each push and pull request, and monthly. The integration tests with the Build
+Tools of Visual Studio 2017, 2019 and 2022 (`.github/workflows/test-vs.yml`) only run when the scripts or tests change.
 
 To compare the performance of `vcvarsall.sh` versions, e.g. `mise run bench -- main HEAD` (Windows only, not run on
 GitHub Actions), see `test/bench.sh -h`.

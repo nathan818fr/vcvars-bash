@@ -34,7 +34,7 @@ url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.14.0"
 [[tools.shellcheck]]
 version = "0.11.0"
 backend = "aqua:koalaman/shellcheck"
-specifiers = ["latest"]
+specifiers = ["0.11"]
 
 [tools.shellcheck."platforms.linux-arm64"]
 checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"

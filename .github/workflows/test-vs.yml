@@ -1,0 +1,82 @@
+name: Test older Visual Studio
+
+# The "Test" workflow uses the Visual Studio of the runner (the latest one), so install the Build Tools of the older
+# versions here, rather than depending on runner images that will be dropped. Run when the scripts or tests change,
+# and monthly to catch Visual Studio updates.
+on:
+  push:
+    branches-ignore: ['dependabot/**']
+    paths:
+      - vcvarsall.sh
+      - vcvarsrun.sh
+      - test/**
+      - .github/workflows/test-vs.yml
+  pull_request:
+    paths:
+      - vcvarsall.sh
+      - vcvarsrun.sh
+      - test/**
+      - .github/workflows/test-vs.yml
+  schedule:
+    - cron: '23 5 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-vs:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - vs: 2017
+            major: 15
+            versions: '[15.0,16.0)'
+          - vs: 2019
+            major: 16
+            versions: '[16.0,17.0)'
+          - vs: 2022
+            major: 17
+            versions: '[17.0,18.0)'
+    name: windows (git-bash, VS ${{ matrix.vs }} Build Tools)
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Only the Build Tools, even if the runner gets another installation of the same version
+      VSWHEREARGS: -products Microsoft.VisualStudio.Product.BuildTools -version ${{ matrix.versions }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Build Tools
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue' # the progress bar slows down the download
+          $installer = Join-Path $env:RUNNER_TEMP 'vs_buildtools.exe'
+          Invoke-WebRequest -Uri 'https://aka.ms/vs/${{ matrix.major }}/release/vs_buildtools.exe' -OutFile $installer
+          $arguments = '--quiet', '--wait', '--norestart', '--nocache', '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended'
+          $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+          # Keep the installer logs, uploaded if the job fails
+          $logs = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'vs-logs')
+          Copy-Item -Path (Join-Path $env:TEMP 'dd_*.log') -Destination $logs
+          # 3010: success, but a restart is required (not needed to use the tools)
+          if ($process.ExitCode -notin 0, 3010) { throw "vs_buildtools.exe failed with exit code $($process.ExitCode)" }
+      - name: Show the selected installation
+        run: |
+          read -ra args <<<"$VSWHEREARGS"
+          '/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe' -latest "${args[@]}" -format text |
+            grep -E '^(installationPath|installationVersion|displayName):'
+      - name: Integration tests
+        run: bash test/integration.sh
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vs-${{ matrix.vs }}-installer-logs
+          path: ${{ runner.temp }}/vs-logs
+          if-no-files-found: ignore

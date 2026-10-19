@@ -12,6 +12,7 @@ permissions:
 jobs:
   capture:
     runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash

@@ -1,6 +1,6 @@
 [tools]
 bats = "1.14.0"
-shellcheck = "latest"
+shellcheck = "0.11" # pinned, so that new warnings don't fail the monthly runs
 shfmt = "3"
 
 [vars]
