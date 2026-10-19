@@ -246,12 +246,18 @@ function stub_path_tools() {
   assert_equal "$(winpath '/c/a')" 'cygpath -w -a -l -- /c/a'
 }
 
-### pathlist_normalize / unixpaths
+### pathlist_normalize / pathlist_remove / unixpaths
 
 @test "pathlist_normalize: removes duplicates and empty entries, keeps order" {
   assert_equal "$(pathlist_normalize '/a::/b:/a:/c:')" '/a:/b:/c'
   assert_equal "$(pathlist_normalize '/with space:/with space')" '/with space'
   assert_equal "$(pathlist_normalize '')" ''
+}
+
+@test "pathlist_remove: removes the given entries and the empty ones, keeps order" {
+  assert_equal "$(pathlist_remove '/a::/b:/with space:/c:/b' '/b:/with space:/missing:')" '/a:/c'
+  assert_equal "$(pathlist_remove '/a:/b' '')" '/a:/b'
+  assert_equal "$(pathlist_remove '/a' '/a')" ''
 }
 
 @test "unixpaths: Cygwin-like platforms convert all the paths with a single cygpath call" {
@@ -284,7 +290,7 @@ function stub_path_tools() {
   [[ ! -e "$CYGPATH_CALLS_FILE" ]]
 }
 
-### check_path_mode / build_path
+### check_path_mode / remove_previous_path / build_path
 
 @test "check_path_mode: accepts the known modes, or none set" {
   local mode
@@ -298,6 +304,30 @@ function stub_path_tools() {
   assert_equal "$status" 1
   assert_equal "$stderr" 'error: Invalid VCVARS_PATH_MODE: Vcvars
 hint: Use vcvars, prepend, append or none'
+}
+
+@test "remove_previous_path: removes the directories of VCVARS_ADDED_PATH from PATH" {
+  PATH=/c/VS/x64:/usr/bin:/c/VS/cmake
+  VCVARS_ADDED_PATH=/c/VS/x64:/c/VS/cmake remove_previous_path
+  assert_equal "$PATH" '/usr/bin'
+}
+
+@test "remove_previous_path: does nothing without VCVARS_ADDED_PATH" {
+  PATH=/usr/bin::/usr/bin
+  Path='C:\VS'
+  bash_platform=win_wsl
+  remove_previous_path
+  assert_equal "$PATH" '/usr/bin::/usr/bin'
+  assert_equal "$Path" 'C:\VS'
+}
+
+@test "remove_previous_path: on WSL, also unsets Path, so that cmd.exe gets its own PATH" {
+  PATH=/c/VS/x64:/usr/bin
+  Path='C:\VS\x64;C:\Windows'
+  bash_platform=win_wsl
+  VCVARS_ADDED_PATH=/c/VS/x64 remove_previous_path
+  assert_equal "$PATH" '/usr/bin'
+  assert_equal "${Path-unset}" 'unset'
 }
 
 # A vcvarsall.bat PATH started from "C:\Windows": the toolchain before it, an extra after it

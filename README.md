@@ -79,7 +79,7 @@ All optional. Run `./vcvarsall.sh` without arguments for the full help.
 | `VCVARS_PATH_MODE` | Where to add the MSVC directories to `PATH`: `vcvars` (default, as `vcvarsall.bat`), `prepend`, `append` or `none` |
 
 By default, `PATH` is changed as `vcvarsall.bat` does: the toolchain goes before your `PATH`, so that e.g. the `link` of Git Bash, MSYS2 and Cygwin doesn't hide the MSVC one, and the extras (e.g. the CMake and Ninja bundled with Visual Studio) go after it, so that yours are still used.
-The added directories are also exported as `VCVARS_ADDED_PATH`.
+The added directories are also exported as `VCVARS_ADDED_PATH`, and removed from `PATH` by the next run, so that running it again (e.g. for another architecture) replaces them.
 
 ## Testing
 

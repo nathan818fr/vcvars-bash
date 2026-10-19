@@ -27,6 +27,7 @@ function main() {
   check failed 'compile and run (x86)' test_compile_and_run x86 32
   check failed 'VCVARS_PATH_MODE=vcvars puts the toolchain first' test_path_mode_vcvars
   check failed 'VCVARS_PATH_MODE=prepend, append and none' test_path_modes_others
+  check failed 'running it again replaces the previous directories' test_rerun
   check failed 'vcvarsrun.sh compiles' test_vcvarsrun_compile
   check failed 'vcvarsrun.sh preserves arguments and exit status' test_vcvarsrun_args_and_status
   check failed 'vcvarsall.bat options reach it unchanged' test_vcvarsall_options
@@ -88,6 +89,27 @@ function test_path_modes_others() {
     assert 'none: PATH is unchanged' test "$PATH" == "$original"
     assert 'none: VCVARS_ADDED_PATH is the same' test "$VCVARS_ADDED_PATH" == "$added"
   )
+}
+
+# e.g. to switch to another architecture in the same shell
+function test_rerun() {
+  eval "$(vcvarsall x64)"
+  local path_x64=$PATH added_x64=$VCVARS_ADDED_PATH
+  eval "$(vcvarsall x64)"
+  assert 'running it again gives the same PATH' test "$PATH" == "$path_x64"
+
+  eval "$(vcvarsall x86)"
+  local dir dirs path=":${PATH}:"
+  IFS=: read -ra dirs <<<"$added_x64"
+  for dir in "${dirs[@]}"; do
+    if [[ ":${VCVARS_ADDED_PATH}:" == *":${dir}:"* ]]; then continue; fi # also added for x86
+    assert "x64 directory removed (${dir})" test "$path" == "${path/":${dir}:"/}"
+  done
+  cl.exe -nologo -EHsc -Fehello_rerun.exe hello.cpp
+  chmod +x -- hello_rerun.exe
+  local out
+  out=$(./hello_rerun.exe | tr -d '\r')
+  assert "hello_rerun.exe prints 'hello 32' (${out})" test "$out" == 'hello 32'
 }
 
 # Compile hello.cpp for an architecture, then check the bitness printed by the executable

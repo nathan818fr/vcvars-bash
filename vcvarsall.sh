@@ -116,6 +116,8 @@ Exported variables (in addition to the vcvarsall.bat ones):
   VCVARS_ADDED_PATH
     The directories added by vcvarsall.bat (not already in PATH), as a path
     list, whatever VCVARS_PATH_MODE is.
+    The next run first removes them from PATH, so that running it again (e.g.
+    for another architecture) replaces them.
 EOF
   local vcvarsall
   vcvarsall=$(find_vcvarsall)
@@ -155,6 +157,7 @@ function main() {
   # Get MSVC environment variables from vcvarsall.bat
   local vcvarsall vcvarsall_env
   vcvarsall=$(find_vcvarsall)
+  remove_previous_path
   vcvarsall_env=$(run_vcvarsall "$vcvarsall" "${vcvarsall_args[@]}")
 
   # Filter MSVC environment variables and export them
@@ -292,6 +295,19 @@ function check_path_mode() {
     return 1
     ;;
   esac
+}
+
+# Remove the directories added by a previous run (e.g. for another architecture) from PATH, so that they don't stay
+# there, and vcvarsall.bat starts from the PATH before it
+# Inputs:
+#   VCVARS_ADDED_PATH: The directories added by the previous run (unset if none)
+# Outputs:
+#   PATH: The PATH without these directories
+#   Path: Unset on WSL (see VCVARS_WSL_SHARE_PATH), so that cmd.exe gets its own PATH
+function remove_previous_path() {
+  if [[ -z "${VCVARS_ADDED_PATH:-}" ]]; then return; fi
+  PATH=$(pathlist_remove "$PATH" "$VCVARS_ADDED_PATH")
+  if [[ "$bash_platform" == 'win_wsl' ]]; then unset Path; fi
 }
 
 # Build the new PATH from the vcvarsall.bat one, as set by VCVARS_PATH_MODE
@@ -698,6 +714,26 @@ function pathlist_normalize() {
     if [[ "$first" == 'true' ]]; then first=false; else printf ':'; fi
     printf '%s' "$path_dir"
   done <<<"${unix_paths}:"
+}
+
+# Remove entries from a unix-style path list, and its empty entries
+# Inputs:
+#   $1: The path list
+#   $2: The entries to remove, as a path list
+# Outputs:
+#   stdout: The path list without these entries
+function pathlist_remove() {
+  local unix_paths=$1 removed_paths=$2
+
+  declare -A removed
+  local path_dir kept=''
+  while IFS= read -r -d ':' path_dir; do
+    if [[ -n "$path_dir" ]]; then removed[$path_dir]=1; fi
+  done <<<"${removed_paths}:"
+  while IFS= read -r -d ':' path_dir; do
+    if [[ -n "$path_dir" && -z "${removed[$path_dir]:-}" ]]; then kept+="${path_dir}:"; fi
+  done <<<"${unix_paths}:"
+  printf '%s\n' "${kept%:}"
 }
 
 # Check whether the kernel is a WSL one, from its release (see https://github.com/microsoft/WSL/issues/423)
