@@ -64,7 +64,7 @@ jobs:
           msystem: MSYS
           update: false
       - if: matrix.name == 'cygwin'
-        uses: cygwin/cygwin-install-action@v6
+        uses: cygwin/cygwin-install-action@v7
         with:
           install-dir: D:\cygwin
       - if: matrix.name == 'wsl2'
